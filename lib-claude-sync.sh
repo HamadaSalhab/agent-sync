@@ -2,11 +2,23 @@
 # Claude Code Sync - Shared Library Functions
 # Source this file in other scripts to load configuration
 
-# Load configuration with proper precedence
+# Configuration variables managed by load_config
+CLAUDE_SYNC_CONFIG_VARS="CLAUDE_SYNC_REMOTE CLAUDE_SYNC_BRANCH CLAUDE_SYNC_ENCRYPTION CLAUDE_BACKUP_RETENTION_DAYS CLAUDE_DATA_DIR CLAUDE_SYNC_VERBOSE CLAUDE_SYNC_COMMIT_MSG"
+
+# Load configuration with proper precedence: env vars > local config > shared config > defaults
 load_config() {
     local SCRIPT_DIR="$1"
- 
-    # Set defaults (env vars preserved via ${:-} syntax in config files)
+    local var
+
+    # Snapshot values set in the environment so config files can't
+    # override them (config files may use plain assignments)
+    for var in $CLAUDE_SYNC_CONFIG_VARS; do
+        if [ -n "$(eval echo "\${$var+set}")" ]; then
+            eval "_CLAUDE_SYNC_ENV_$var=\"\$$var\""
+        fi
+    done
+
+    # Set defaults
     CLAUDE_SYNC_REMOTE="${CLAUDE_SYNC_REMOTE:-}"
     CLAUDE_SYNC_BRANCH="${CLAUDE_SYNC_BRANCH:-main}"
     CLAUDE_SYNC_ENCRYPTION="${CLAUDE_SYNC_ENCRYPTION:-false}"
@@ -15,15 +27,23 @@ load_config() {
     CLAUDE_SYNC_VERBOSE="${CLAUDE_SYNC_VERBOSE:-false}"
     CLAUDE_SYNC_COMMIT_MSG="${CLAUDE_SYNC_COMMIT_MSG:-Sync conversations - {date} {time} - {hostname}}"
 
-    # Load shared config if exists (won't override env vars due to ${:-} syntax)
+    # Load shared config if exists
     if [ -f "$SCRIPT_DIR/.claude-sync-config" ]; then
         source "$SCRIPT_DIR/.claude-sync-config"
     fi
 
-    # Load local config if exists (won't override env vars due to ${:-} syntax)
+    # Load local config if exists
     if [ -f "$SCRIPT_DIR/.claude-sync-config.local" ]; then
         source "$SCRIPT_DIR/.claude-sync-config.local"
     fi
+
+    # Re-apply environment values (highest precedence)
+    for var in $CLAUDE_SYNC_CONFIG_VARS; do
+        if [ -n "$(eval echo "\${_CLAUDE_SYNC_ENV_$var+set}")" ]; then
+            eval "$var=\"\$_CLAUDE_SYNC_ENV_$var\""
+            unset "_CLAUDE_SYNC_ENV_$var"
+        fi
+    done
 }
 
 # Validate required configuration

@@ -319,6 +319,7 @@ All commands support `--version` or `-v` to display version information.
 
 ### Utility Commands
 - `claude-migrate-project <old-path> <new-path>` - Migrate conversations when renaming/moving a project
+- `claude-sync-repair-mtimes` - Restore session file times from conversation content (fixes session ordering broken by earlier pulls)
 
 **Example:** If you move a project from `/home/user/old-name` to `/home/user/new-name`:
 ```bash
@@ -346,6 +347,13 @@ mv /home/user/old-name /home/user/new-name
 ### Conversations not appearing after sync
 - Restart Claude Code after `claude-sync-pull`
 - Check permissions: `ls -la ~/.claude/projects`
+
+### Synced sessions all show the pull time / wrong order
+**Problem:** After `claude-sync-pull`, sessions appear at the top of Claude Code's session picker with the pull time instead of their real last-used time.
+
+**Cause:** Git does not store file modification times — files written by `git pull` get the checkout time. Sync now records real mtimes in a `.mtimes` manifest at push time and restores them at pull time, so this only affects pulls made before this fix.
+
+**Solution:** Run `claude-sync-repair-mtimes` once on the affected machine, then restart Claude Code. It resets each session file's time to the last timestamp recorded inside the conversation itself.
 
 ### Git push fails
 - Verify remote configured: `git remote -v`

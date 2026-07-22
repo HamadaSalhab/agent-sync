@@ -63,6 +63,14 @@ else
     echo "No git remote configured. Using local copy."
 fi
 
+# Restore recorded mtimes (git checkout sets them to the current time,
+# which breaks session ordering in Claude Code and lets stale files
+# win the rsync --update merge below)
+if [ -f "$REPO_DIR/.mtimes" ]; then
+    echo "Restoring file modification times..."
+    apply_mtimes_manifest "$REPO_DIR"
+fi
+
 cd "$SCRIPT_DIR"
 
 # Create Claude directory if it doesn't exist

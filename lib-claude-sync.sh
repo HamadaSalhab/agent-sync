@@ -90,6 +90,56 @@ log_verbose() {
     fi
 }
 
+# Get file modification time as epoch seconds (BSD/macOS stat, then GNU stat)
+file_mtime() {
+    stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1"
+}
+
+# Set file modification time from epoch seconds (GNU touch, then BSD/macOS touch)
+touch_epoch() {
+    local epoch="$1"
+    local file="$2"
+    touch -d "@$epoch" "$file" 2>/dev/null || \
+        touch -t "$(date -r "$epoch" '+%Y%m%d%H%M.%S')" "$file"
+}
+
+# Convert an ISO 8601 UTC timestamp (e.g. 2026-07-22T09:15:30.123Z) to epoch seconds
+iso_to_epoch() {
+    local iso="${1:0:19}"
+    date -j -u -f '%Y-%m-%dT%H:%M:%S' "$iso" '+%s' 2>/dev/null || \
+        date -u -d "$iso" '+%s'
+}
+
+# Write a manifest of relative path + mtime for all synced files in a repo dir.
+# Git does not store mtimes, so pulls need this to restore them after checkout.
+write_mtimes_manifest() {
+    local repo_dir="$1"
+    local manifest="$repo_dir/.mtimes"
+    (
+        cd "$repo_dir"
+        {
+            find projects file-history todos -type f 2>/dev/null
+            [ -f history.jsonl ] && echo "history.jsonl"
+        } | while IFS= read -r f; do
+            printf '%s\t%s\n' "$(file_mtime "$f")" "$f"
+        done
+    ) | sort -t "$(printf '\t')" -k2 > "$manifest"
+}
+
+# Restore mtimes recorded in a repo's manifest (skips files already correct)
+apply_mtimes_manifest() {
+    local repo_dir="$1"
+    local manifest="$repo_dir/.mtimes"
+    [ -f "$manifest" ] || return 0
+    # Note: not named "path" — zsh ties lowercase path to PATH
+    local epoch rel_path
+    while IFS="$(printf '\t')" read -r epoch rel_path; do
+        [ -f "$repo_dir/$rel_path" ] || continue
+        [ "$(file_mtime "$repo_dir/$rel_path")" = "$epoch" ] && continue
+        touch_epoch "$epoch" "$repo_dir/$rel_path"
+    done < "$manifest"
+}
+
 # Show version from VERSION file
 show_version() {
     local SCRIPT_DIR="$1"

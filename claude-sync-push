@@ -62,6 +62,9 @@ if git remote | grep -q origin 2>/dev/null; then
     git pull origin "$CLAUDE_SYNC_BRANCH" 2>/dev/null || {
         echo "Note: Could not pull. Continuing with local merge..."
     }
+    # Restore recorded mtimes on freshly checked-out files so the
+    # rsync --update merge below compares real timestamps
+    apply_mtimes_manifest "$REPO_DIR"
     echo ""
 fi
 
@@ -99,6 +102,12 @@ echo "Syncing global history..."
 if [ -f "$CLAUDE_DIR/history.jsonl" ]; then
     cp "$CLAUDE_DIR/history.jsonl" "$REPO_DIR/history.jsonl"
 fi
+
+# Record mtimes so pulls on other machines can restore them
+# (git checkout sets mtimes to the current time, which breaks
+# session ordering in Claude Code and rsync --update comparisons)
+echo "Recording file modification times..."
+write_mtimes_manifest "$REPO_DIR"
 
 # Check if there are changes
 if [ -z "$(git status --porcelain)" ]; then

@@ -29,6 +29,7 @@ This tool solves these problems by providing git-based sync with encryption supp
 - `claude-sync-push` - Merges local conversations to git remote
 - `claude-sync-pull` - Pulls and merges remote conversations locally
 - `claude-sync-status` - Shows configuration and sync state
+- `claude-sync-repair-mtimes` - Restores session file mtimes from conversation timestamps
 
 **Backup System**
 - `claude-backup` - Creates timestamped tar.gz backups
@@ -65,6 +66,9 @@ This tool solves these problems by providing git-based sync with encryption supp
 2. `claude-sync-push` pulls latest first, then uses `rsync --update` to merge (newer files win, never delete)
 3. All machines accumulate conversations from all other machines
 4. Git commits track which machine contributed which conversations
+
+**Mtime Preservation:**
+Git does not store file modification times — checked-out files get the current time, which breaks both Claude Code's session ordering and the `rsync --update` newer-wins comparison. To compensate, `claude-sync-push` records every synced file's mtime in a `.mtimes` manifest (committed with the data), and both push and pull restore recorded mtimes after `git pull` before any rsync runs. `claude-sync-repair-mtimes` fixes machines damaged by pulls that predate this mechanism.
 
 ### Design Decisions
 

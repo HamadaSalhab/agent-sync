@@ -71,16 +71,28 @@ mkdir -p "$REPO_DIR/file-history"
 mkdir -p "$REPO_DIR/todos"
 
 # Sync projects (conversations) - MERGE, don't delete
-echo "Merging local conversations into repo..."
-rsync -av --update "$CLAUDE_DIR/projects/" "$REPO_DIR/projects/"
+if [ -d "$CLAUDE_DIR/projects" ]; then
+    echo "Merging local conversations into repo..."
+    rsync -av --update "$CLAUDE_DIR/projects/" "$REPO_DIR/projects/"
+else
+    echo "Skipping projects (not found in $CLAUDE_DIR)"
+fi
 
 # Sync file-history - MERGE, don't delete
-echo "Merging file history..."
-rsync -av --update "$CLAUDE_DIR/file-history/" "$REPO_DIR/file-history/"
+if [ -d "$CLAUDE_DIR/file-history" ]; then
+    echo "Merging file history..."
+    rsync -av --update "$CLAUDE_DIR/file-history/" "$REPO_DIR/file-history/"
+else
+    echo "Skipping file history (not found in $CLAUDE_DIR)"
+fi
 
 # Sync todos - MERGE, don't delete
-echo "Merging todos..."
-rsync -av --update "$CLAUDE_DIR/todos/" "$REPO_DIR/todos/"
+if [ -d "$CLAUDE_DIR/todos" ]; then
+    echo "Merging todos..."
+    rsync -av --update "$CLAUDE_DIR/todos/" "$REPO_DIR/todos/"
+else
+    echo "Skipping todos (not found in $CLAUDE_DIR)"
+fi
 
 # Sync global history
 echo "Syncing global history..."

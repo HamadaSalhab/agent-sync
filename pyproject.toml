@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-sync"
+version = "0.1.0"
+description = "Git-based conversation sync for Claude Code and Codex"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [{name = "agent-sync contributors"}]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+agent-sync = "agent_sync.cli:main"
+
+[tool.setuptools]
+packages = ["agent_sync"]

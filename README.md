@@ -1,485 +1,215 @@
-# Claude Code Conversation Sync
+# agent-sync
 
-Synchronize your Claude Code conversations across multiple computers using git, with optional encryption.
+Sync **Claude Code and Codex conversations across your computers** through one private Git repository. Includes local backups, optional git-crypt encryption, and recovery copies when conversations diverge.
 
-## Why?
+> **Fork attribution:** agent-sync is a fork and evolution of [Claude Code Conversation Sync](https://github.com/porkchop/claude-code-sync), created by **[porkchop](https://github.com/porkchop)** and its contributors. It builds on [HamadaSalhab's modified fork](https://github.com/HamadaSalhab/claude-code-sync). The original project established the Git-based conversation sync, backup, and encryption workflow. This repository preserves its Git history and original MIT copyright notice. Thank you to the original author and contributors. See [NOTICE.md](NOTICE.md).
 
-Claude Code stores conversations locally in `~/.claude/`, which means:
-- ❌ Conversations are machine-locked
-- ❌ No sync between computers
-- ❌ Risk of losing conversations if machine fails
-- ❌ Can't easily share with team members
+**Version 0.1.0:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
 
-**This tool fixes that:**
-- ✅ Sync conversations across all your machines
-- ✅ Git-based version control
-- ✅ Optional transparent encryption (git-crypt)
-- ✅ Local backups with auto-cleanup
-- ✅ Works with any git provider (GitHub, Bitbucket, GitLab, etc.)
+## Install
 
-## Quick Start
+Requires **Python 3.8+** and **Git**. No third-party Python runtime packages, API key, or paid service is required by agent-sync. A supported Python release is recommended for daily use. Optional encryption requires `git-crypt`.
 
-### Installation
+From this source checkout:
 
 ```bash
-git clone https://github.com/porkchop/claude-code-sync.git
-cd claude-code-sync
-chmod +x claude-*
+./agent-sync --version
+./agent-sync --help
 ```
 
-Add to your PATH (add this to `~/.bashrc` or `~/.zshrc`):
+Add the checkout to your shell's `PATH`, or install the CLI into a virtual environment:
+
 ```bash
-export PATH="$HOME/claude-code-sync:$PATH"
+python3 -m venv .venv
+.venv/bin/python -m pip install .
+.venv/bin/agent-sync --help
 ```
 
-### Initial Setup (First Machine)
+The examples below assume `agent-sync` is on your `PATH`.
 
-1. **Create a private git repository** for your conversations:
+## First machine
 
-   **GitHub:**
-   - Go to https://github.com/new
-   - Name it something like `claude-conversations`
-   - Select **Private**
-   - Leave "Initialize with README" unchecked (empty repo)
-   - Click "Create repository"
-   - Copy the SSH URL: `git@github.com:username/claude-conversations.git`
+Create an **empty private Git repository** for conversation data on your preferred Git host. Keep it separate from this public source-code repository. Then:
 
-   **Bitbucket:**
-   - Go to https://bitbucket.org/repo/create
-   - Name it something like `claude-conversations`
-   - Set Access level to **Private**
-   - Click "Create repository"
-   - Copy the SSH URL: `git@bitbucket.org:username/claude-conversations.git`
-
-   **GitLab:**
-   - Go to https://gitlab.com/projects/new
-   - Name it something like `claude-conversations`
-   - Set Visibility to **Private**
-   - Uncheck "Initialize repository with a README"
-   - Click "Create project"
-   - Copy the SSH URL: `git@gitlab.com:username/claude-conversations.git`
-
-   > **Note:** Make sure you have SSH keys set up for your git provider. If `git clone git@github.com:...` works for your other repos, you're all set. Otherwise, see your provider's SSH key documentation.
-
-2. **Configure sync settings**:
-   ```bash
-   claude-config
-   ```
-
-3. **Create your first backup** (safety first!):
-   ```bash
-   claude-backup
-   ```
-
-4. **Initialize the repository**:
-   ```bash
-   claude-sync-init
-   ```
-
-5. **(Optional) Enable encryption**:
-   ```bash
-   claude-enable-encryption
-   ```
-   Save the encryption key to your password manager (KeePass, 1Password, etc.)
-
-6. **Exit Claude Code**, then push your conversations:
-   ```bash
-   claude-sync-push
-   ```
-   > ⚠️ **Important:** Claude Code only writes conversations to disk when you exit. Always exit Claude Code before running `claude-sync-push` to ensure you're syncing the latest state.
-
-### Setup on Additional Machines
-
-1. **Clone this tool**:
-   ```bash
-   git clone https://github.com/porkchop/claude-code-sync.git
-   cd claude-code-sync
-   chmod +x claude-*
-   ```
-
-2. **Add to PATH** (same as above)
-
-3. **Configure with same remote URL**:
-   ```bash
-   claude-config
-   ```
-
-4. **Create a backup** of this machine's existing conversations:
-   ```bash
-   claude-backup
-   ```
-
-5. **Initialize and clone the repository**:
-   ```bash
-   claude-sync-init
-   ```
-
-6. **If the repository is encrypted**, restore your key and unlock:
-   ```bash
-   claude-restore-encryption-key
-   ```
-   This will restore your key from your password manager and unlock the repository.
-
-7. **Sync conversations to your local Claude**:
-   ```bash
-   claude-sync-pull
-   ```
-
-8. **Exit Claude Code** (if running), then add this machine's conversations:
-   ```bash
-   claude-sync-push
-   ```
-   > ⚠️ **Important:** Always exit Claude Code before `claude-sync-push` to capture the latest conversation state.
-
-9. **Restart Claude Code** to see all synced conversations
-
-## Daily Usage
-
-### Before Starting Work
 ```bash
-claude-sync-pull
-# Then start Claude Code
+agent-sync init --remote git@github.com:YOUR_USERNAME/agent-conversations.git
+
+# Close Claude Code and Codex before syncing.
+agent-sync backup
+agent-sync push --all
 ```
 
-### After Working / Before Switching Machines
+`init` connects to the remote and creates the data format commit if it is empty. `push` takes a snapshot of both tools and uploads it. A tool that has not been used on this machine is skipped.
+
+### With encryption
+
+Enable encryption **before the first conversation push**, when initializing an empty remote:
+
 ```bash
-# Exit Claude Code first (important!)
-claude-sync-push
+agent-sync init \
+  --remote git@github.com:YOUR_USERNAME/agent-conversations.git \
+  --encrypt --key-file "$HOME/agent-sync.key"
+agent-sync push --all
 ```
 
-> ⚠️ **Critical:** Claude Code only writes conversations to disk when you exit. Always:
-> 1. Exit Claude Code completely
-> 2. Run `claude-sync-push`
-> 3. Then switch machines or close your terminal
->
-> If you run `claude-sync-push` while Claude Code is still running, you won't sync your latest work!
+Keep the exported key in a password manager. The command does not print key contents. Choose a new key path outside the sync state directory. Encryption cannot be retroactively enabled on an existing data repository by this version.
 
-### Check Status
+## Additional machines
+
+Install the tool, then connect to the same conversation remote:
+
 ```bash
-claude-sync-status  # Shows config, sync state, conversation counts
+agent-sync init --remote git@github.com:YOUR_USERNAME/agent-conversations.git
+
+# For an encrypted remote, add: --key-file "$HOME/agent-sync.key"
+
+# Close the agents first. Existing local conversations are backed up and merged.
+agent-sync pull --all
+agent-sync push --all
 ```
 
-### Manage Configuration
+Start each agent to find the synced conversations. In Codex CLI, `codex resume --all` searches across project directories; `codex resume <session-id>` selects a specific session. Sign in to each agent separately on each machine.
+
+## Daily use
+
 ```bash
-claude-config  # Edit settings interactively
+# Before starting the agents:
+agent-sync pull
+
+# After closing the agents, before switching computers:
+agent-sync push
+
+agent-sync status
 ```
 
-## Features
+Default commands use the tools selected during `init` (both by default). Choose a subset when needed:
 
-### 🔄 Multi-Machine Sync
-
-Conversations **accumulate** across all machines:
-- **Machine A** has conversations 1, 2, 3
-- **Machine B** has conversations 3, 4, 5 (conversation 3 updated more recently)
-- After syncing: **Both machines have 1, 2, 3 (B's version), 4, 5**
-
-⚠️ **Important:** Claude Code stores conversations by project path. For sync to work correctly, **your projects must be at the same absolute paths on all machines**. For example, if you work in `/home/alice/projects/myapp` on one machine, use the same path on others.
-
-If you need to move a project, use `claude-migrate-project` to update the conversation paths (see Utilities below).
-
-### 🔐 Optional Encryption
-
-Enable transparent encryption with git-crypt. See [Requirements](#installing-git-crypt-for-encryption) section for installation on your platform.
-
-**First machine (enable encryption):**
 ```bash
-claude-sync-init             # Initialize repo first
-claude-enable-encryption     # Set up encryption, generates key
-claude-sync-push             # Push encrypted conversations
+agent-sync push --tool claude
+agent-sync pull --tool codex
+agent-sync push --all
 ```
 
-The script will generate an encryption key and display it in base64 format.
-**Save this key to your password manager immediately!**
+### Preview changes
 
-**On other machines:**
 ```bash
-claude-restore-encryption-key  # Restore key from password manager
-claude-sync-init               # Clone and unlock repository
-claude-sync-pull               # Sync conversations
+agent-sync pull --dry-run
+agent-sync push --dry-run
 ```
 
-### 💾 Backup & Restore
+Dry runs perform **no fetch, write, commit, or push**. Pull previews use the already-cached checkout, so they cannot show changes that have not been fetched yet. Push previews report the number of supported files that would be snapshotted, not a remote diff.
 
-**Create backups:**
+## What is synced
+
+| Tool | Files | Policy |
+| --- | --- | --- |
+| Claude Code | `projects/**/*.jsonl` | Conversation records, including nested subagent logs |
+| Claude Code | `file-history/**`, `todos/**/*.json` | Saved file edits and todo records |
+| Claude Code | `history.jsonl` | Deduplicate complete records and order by timestamp |
+| Codex | `sessions/**/*.jsonl`, `archived_sessions/**/*.jsonl` | Native session logs |
+| Codex | `history.jsonl` | Deduplicate complete records and order by timestamp |
+| Codex | `session_index.jsonl` | Merge by session ID, keeping the latest named entry |
+
+Credentials, `auth.json`, SQLite databases and their WAL files, caches, logs, browser data, settings, plugins, skills, rules, memories, and project source files are outside this release's allowlist. A conversation or saved file edit can itself contain secrets; the allowlist does not redact message contents.
+
+### Codex compatibility
+
+Codex stores its local data under `CODEX_HOME`, normally `~/.codex`. The syncer transfers session logs and history while letting Codex manage its own databases. Its native `thread/list` operation supports scanning session logs and repairing metadata (`useStateDbOnly: false`). See the official [state-location documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#config-and-state-locations) and [App Server documentation](https://learn.chatgpt.com/docs/app-server).
+
+The native integration test uses an isolated Codex home, discovers a transferred session with `thread/list`, and reads its conversation with `thread/read`. It sends no model prompt and requires no credentials. Verified locally with **Codex CLI 0.154.0**. Run this test against your installed version before relying on a different session format.
+
+Full desktop-app state synchronization is outside v0.1: pins, project organization, running tasks, attachments stored outside session logs, and database-only history are not copied. A desktop build may have additional discovery requirements; desktop UI visibility and interactive continuation are not covered by the automated tests.
+
+## How conflicts work
+
+The data repository contains a separate snapshot for each machine:
+
+```text
+agent-sync.json
+machines/
+  <machine-id>/
+    claude/
+      manifest.json       # hashes and original modification times
+      data/projects/...
+    codex/
+      manifest.json
+      data/sessions/...
+```
+
+Every `init` generates a new machine ID. **Initialize each computer independently; do not copy `config.json` between machines.** Separate namespaces allow Git to merge pushes from different machines. Git's history retains earlier snapshots, and identical blobs are deduplicated by Git.
+
+On pull:
+
+1. Fetch and merge the remote. A Git failure stops the command before local agent files are changed.
+2. Validate supported paths and file hashes, then plan all merges.
+3. Back up supported local data before applying updates.
+4. If one conversation is an exact extension of another, use the longer history regardless of clock differences.
+5. If a conversation has different continuations, keep the existing local version and save the alternatives under `AGENT_SYNC_HOME/conflicts/`. On a new machine, select a deterministic version and save all alternatives.
+
+A conflict exits with **code 2** and prints its path. Each recovery folder contains the complete alternative in `content` and its original relative path in `path.txt`. Inspect these copies before manually choosing a version. Transcripts are never concatenated or sorted together to invent a conversation.
+
+Pulling is additive: it does not delete local files. **Deletions and archive/unarchive actions do not propagate reliably across machines in this version.** An archived session can have a stale active copy on another machine; clean up its active/archive location manually after syncing. Close the agents before pull, push, or restore; agent-sync's lock coordinates its own commands, not running agent processes.
+
+## Paths and configuration
+
 ```bash
-claude-backup  # Creates timestamped backup
+agent-sync init --remote git@github.com:YOUR_USERNAME/agent-conversations.git \
+  --claude-dir "$HOME/.claude" \
+  --codex-dir "$HOME/.codex" \
+  --branch main
 ```
 
-**List backups:**
+| Setting | Default | Override |
+| --- | --- | --- |
+| Sync state | `~/.local/share/agent-sync` | `AGENT_SYNC_HOME` or global `--state-dir` |
+| Claude data | `~/.claude` | `init --claude-dir`, then `CLAUDE_DATA_DIR` |
+| Codex data | `~/.codex` | `init --codex-dir`, then `CODEX_HOME` |
+| Selected tools | Both | `init --tool claude` / `--tool codex`; per-command `--tool` or `--all` |
+
+Configuration is stored as JSON in `<state>/config.json`; it is never executed as shell code. Environment data-directory overrides take precedence over saved paths. The state and agent directories must not overlap. The global `--state-dir` option goes **before** the subcommand:
+
 ```bash
-claude-backup-list
+agent-sync --state-dir /some/private/location status
 ```
 
-**Restore from backup:**
+Project paths inside conversations are preserved. Use matching absolute project paths across machines for the most predictable continuation. This version does not rewrite usernames, working directories, or paths inside messages, and it does not transfer your actual project checkout or worktrees.
+
+## Backup and restore
+
 ```bash
-claude-restore <backup-name>
+agent-sync backup --all
+agent-sync backups
+agent-sync restore BACKUP_NAME --dry-run
+agent-sync restore BACKUP_NAME
 ```
 
-Backups are:
-- Compressed (tar.gz)
-- Timestamped with machine name
-- Stored locally (not synced)
-- Auto-cleaned based on retention policy (default: 30 days)
+Backups contain only supported conversation files and a checksum manifest. Restore makes another safety backup first, then replaces the backed-up files while retaining unrelated files. Backups and conflict copies are local and **unencrypted**, even when the Git remote uses git-crypt. They are stored under a private state directory with owner-only permissions. There is no automatic retention cleanup in v0.1; remove old backups manually after verifying your recovery copies.
 
-## Configuration
+## Migrating from claude-code-sync
 
-Configuration uses three layers (priority: highest to lowest):
+Your existing `~/.claude` data remains the source for the new tool. Create a new empty conversation remote, initialize agent-sync, and push those local conversations. If some conversations exist only in the old sync repository, restore them using the old tool first. Keep that repository as a backup.
 
-1. **Environment variables** - `CLAUDE_SYNC_*`
-2. **Local config** - `.claude-sync-config.local` (machine-specific, gitignored)
-3. **Shared config** - `.claude-sync-config` (defaults, version controlled)
-
-### Available Settings
-
-- `CLAUDE_SYNC_REMOTE` - Git remote URL (required)
-- `CLAUDE_SYNC_BRANCH` - Git branch (default: `main`)
-- `CLAUDE_SYNC_ENCRYPTION` - Enable encryption (default: `false`)
-- `CLAUDE_BACKUP_RETENTION_DAYS` - Backup retention (default: `30`)
-- `CLAUDE_DATA_DIR` - Claude data directory (default: `~/.claude`)
-- `CLAUDE_SYNC_VERBOSE` - Verbose output (default: `false`)
-
-See [CONFIGURATION.md](CONFIGURATION.md) for detailed configuration guide.
-
-## How It Works
-
-### Sync Strategy
-
-**Init** (`claude-sync-init`):
-1. Clones conversations repository from remote (or initializes fresh if empty)
-2. Detects encryption and prompts for unlock if needed
-3. Prepares repository for push/pull operations
-
-**Push** (`claude-sync-push`):
-1. Pulls latest from remote (avoid conflicts)
-2. Merges local conversations using `rsync --update`
-3. Commits and pushes to remote
-
-**Pull** (`claude-sync-pull`):
-1. Pulls from remote
-2. Merges into `~/.claude/` (preserves newer files)
-
-**Conflict Resolution:**
-- Same conversation UUID: Newer file wins (based on modification time)
-- Different UUIDs: All conversations kept (merged)
-- History: Deduplicated and merged
-
-### What Gets Synced
-
-```
-~/.claude/
-├── projects/        → Conversation files (.jsonl)
-├── file-history/    → File edit history
-├── todos/           → Todo lists
-└── history.jsonl    → Command history
-```
-
-### What's Excluded
-
-- `.credentials.json` (never synced)
-- Debug files
-- Local backups
-
-## Security & Privacy
-
-⚠️ **Important:** Conversations contain:
-- Full text of all messages
-- All code discussed or generated
-- File paths and project structure
-- System information
-
-**Recommendations:**
-- ✅ Use **private** git repository
-- ✅ Enable **encryption** for sensitive work
-- ✅ Store encryption key in **password manager** (KeePass, 1Password, etc.)
-- ✅ Never commit real API keys or secrets in conversations
-
-See [SECURITY.md](SECURITY.md) for full security analysis and encryption guide.
-
-## Commands Reference
-
-All commands support `--version` or `-v` to display version information.
-
-### Setup Commands
-- `claude-config` - Interactive configuration wizard
-- `claude-sync-init` - Initialize/clone the conversations repository
-
-### Sync Commands
-- `claude-sync-push` - Sync local → remote (pull, merge, push)
-- `claude-sync-pull` - Sync remote → local
-- `claude-sync-status` - Show status and configuration
-
-### Backup Commands
-- `claude-backup` - Create timestamped backup
-- `claude-backup-list` - List available backups
-- `claude-restore <name>` - Restore from backup
-
-### Encryption Commands
-- `claude-enable-encryption` - Enable git-crypt encryption
-- `claude-restore-encryption-key` - Restore encryption key from password manager
-
-### Utility Commands
-- `claude-migrate-project <old-path> <new-path>` - Migrate conversations when renaming/moving a project
-- `claude-sync-repair-mtimes` - Restore session file times from conversation content (fixes session ordering broken by earlier pulls)
-
-**Example:** If you move a project from `/home/user/old-name` to `/home/user/new-name`:
-```bash
-claude-migrate-project /home/user/old-name /home/user/new-name
-mv /home/user/old-name /home/user/new-name
-```
+The original flat conversation-repository layout is not accepted by agent-sync. The new source checkout retains the original commit history, but its CLI replaces the old `claude-*` scripts.
 
 ## Troubleshooting
 
-### Latest changes not syncing
-**Problem:** You ran `claude-sync-push` but your latest conversation changes aren't showing up on other machines.
+- **Push rejected after another machine pushed:** run `agent-sync push` again. It fetches and merges first, and retries any previously committed snapshot even if local files have not changed.
+- **Uncommitted changes in the sync checkout:** inspect `<state>/repository` with Git. Recover or commit the intended snapshot changes before retrying; the CLI never resets them automatically.
+- **Encrypted checkout is locked:** run `agent-sync unlock --key-file /path/to/key`.
+- **Malformed or changing JSONL:** close the agent and retry. Partial conversation writes are rejected before snapshot publication.
+- **Missing conversations:** restart the agent; in Codex try `codex resume --all`. Check project paths and the compatibility limitations above.
+- **A new machine has no agent data directory:** pull creates directories for transferred files. Push skips missing directories.
 
-**Solution:** Claude Code only writes conversations to disk when you exit. Always:
-1. Type `/exit` in Claude Code
-2. Wait for it to fully close
-3. Then run `claude-sync-push`
+Exit codes: `0` success, `1` error, `2` preserved conflicts, `130` interrupted. Argument parsing also uses `2` for invalid command-line arguments.
 
-### "Repository not initialized" error
-- Run `claude-sync-init` before using `claude-sync-push` or `claude-sync-pull`
-
-### "Repository is encrypted but locked" error
-- Restore your encryption key: `claude-restore-encryption-key`
-- Then re-run `claude-sync-init` to unlock
-
-### Conversations not appearing after sync
-- Restart Claude Code after `claude-sync-pull`
-- Check permissions: `ls -la ~/.claude/projects`
-
-### Synced sessions all show the pull time / wrong order
-**Problem:** After `claude-sync-pull`, sessions appear at the top of Claude Code's session picker with the pull time instead of their real last-used time.
-
-**Cause:** Git does not store file modification times — files written by `git pull` get the checkout time. Sync now records real mtimes in a `.mtimes` manifest at push time and restores them at pull time, so this only affects pulls made before this fix.
-
-**Solution:** Run `claude-sync-repair-mtimes` once on the affected machine, then restart Claude Code. It resets each session file's time to the last timestamp recorded inside the conversation itself.
-
-### Git push fails
-- Verify remote configured: `git remote -v`
-- Check git credentials
-- Ensure you have write access to repository
-
-### Encryption key mismatch
-- Ensure you're using the correct key from your password manager
-- If key was lost, you'll need to start fresh with a new encrypted repo
-
-### Configuration errors
-- Run `claude-sync-status` to see current config
-- Run `claude-config` to reconfigure
-- Check `.claude-sync-config.local` exists
-
-## Requirements
-
-### Core Dependencies
-- Bash 4.0+
-- Git
-- rsync
-- tar, gzip
-- git-crypt (optional, for encryption)
-
-### Platform Support
-
-**✅ Linux (Tested & Recommended)**
-- Ubuntu/Debian - Fully tested and working
-- Fedora/RHEL/CentOS - Should work (standard bash/git/rsync)
-- Arch Linux - Should work
-- Pop!_OS - Should work (Ubuntu-based)
-
-All standard Linux distributions with bash 4.0+ should work out of the box.
-
-**✅ macOS (Should Work)**
-- macOS 10.14+ - Should work
-- Comes with bash, git, rsync by default
-- May need to install git-crypt via Homebrew
-- Note: Default shell is zsh, but bash scripts run fine
-
-**✅ Windows WSL (Should Work)**
-- WSL 1 or WSL 2 with Ubuntu/Debian - Should work
-- Treats WSL as a Linux environment
-- All Linux instructions apply
-
-**❌ Windows Native (Not Supported)**
-- Git Bash - Limited support, not recommended
-- PowerShell - Not compatible (bash scripts only)
-- Native Windows - Not supported
-
-### Installing git-crypt (for encryption)
-
-**Ubuntu/Debian/Pop!_OS:**
-```bash
-sudo apt update
-sudo apt install git-crypt
-```
-
-**Fedora/RHEL/CentOS:**
-```bash
-sudo dnf install git-crypt     # Fedora/RHEL 8+
-# OR
-sudo yum install git-crypt     # CentOS/RHEL 7
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S git-crypt
-```
-
-**macOS:**
-```bash
-brew install git-crypt
-```
-
-**Windows WSL:**
-Use the Linux distribution's package manager (usually `apt` for Ubuntu):
-```bash
-sudo apt update
-sudo apt install git-crypt
-```
-
-## Versioning
-
-This project uses [Semantic Versioning](https://semver.org/). Check the version of any command:
+## Development
 
 ```bash
-claude-sync-push --version
-claude-backup --version
-# etc.
+python3 -m unittest discover -s tests -v
 ```
 
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+Tests use temporary agent homes and local bare Git remotes. Native Codex and git-crypt tests run when their binaries are installed; otherwise they report a skip. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
-## Contributing
+## License and attribution
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-Quick summary:
-- Follow existing code style
-- Add `--version` support to new commands
-- Update documentation
-- Test on fresh install
-- Ensure scripts return to original directory
-
-### For Maintainers
-
-Release process:
-```bash
-./claude-release patch  # or minor, major
-# Edit CHANGELOG.md with release notes
-# Push: git push origin master --tags
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for full release documentation.
-
-## License
-
-MIT License - see LICENSE file
-
-## Support
-
-- 🐛 [Report bugs](https://github.com/porkchop/claude-code-sync/issues)
-- 💡 [Request features](https://github.com/porkchop/claude-code-sync/issues)
-- 📖 [Read the docs](https://github.com/porkchop/claude-code-sync#readme)
-
-## Acknowledgments
-
-Built for the Claude Code community. Inspired by the need to work seamlessly across multiple development machines.
+[MIT](LICENSE). Original work by porkchop and the Claude Code Sync contributors; subsequent changes by HamadaSalhab and agent-sync contributors. The upstream license notice and history are retained. This is an independent community project and is not affiliated with Anthropic or OpenAI.

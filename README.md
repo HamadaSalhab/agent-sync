@@ -4,7 +4,7 @@ Sync **Claude Code and Codex conversations across your computers** through one p
 
 > **Fork attribution:** agent-sync is a fork and evolution of [Claude Code Conversation Sync](https://github.com/porkchop/claude-code-sync), created by **[porkchop](https://github.com/porkchop)** and its contributors. It builds on [HamadaSalhab's modified fork](https://github.com/HamadaSalhab/claude-code-sync). The original project established the Git-based conversation sync, backup, and encryption workflow. This repository preserves its Git history and original MIT copyright notice. Thank you to the original author and contributors. See [NOTICE.md](NOTICE.md).
 
-**Version 0.1.2:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
+**Version 0.1.3:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
 
 ## Install
 
@@ -154,6 +154,30 @@ On pull:
 A conflict exits with **code 2** and prints its path. Each recovery folder contains the complete alternative in `content` and its original relative path in `path.txt`. Inspect these copies before manually choosing a version. Transcripts are never concatenated or sorted together to invent a conversation.
 
 Pulling is additive: it does not delete local files. **Deletions and archive/unarchive actions do not propagate reliably across machines in this version.** An archived session can have a stale active copy on another machine; clean up its active/archive location manually after syncing. Close the agents before pull, push, or restore; agent-sync's lock coordinates its own commands, not running agent processes.
+
+## Read-only conflict audit
+
+```bash
+agent-sync audit-conflicts --tool codex
+agent-sync audit-conflicts --tool codex --json > conflict-report.json
+```
+
+The audit compares **already-preserved alternatives** with their current local counterparts, grouped by conversation ID. It reads cached snapshots and portable history exports; it does not fetch, push, resolve conflicts, restore names, or change configuration, sessions, backups, recovery copies, or machine identity. Reports go to stdout. Native reads use disposable homes without credentials and never start model turns. Temporary copies can contain conversation content and are removed when the command finishes normally.
+
+Each comparison reports one of:
+
+- `equivalent_content`: matching active dialogue and compared archival/context records. **This does not mean the files are interchangeable.**
+- `local_additional_content` / `alternative_additional_content`: one side has additional ordered content or instruction context.
+- `divergent_content`: the compared content differs on both sides or has a different order.
+- `inconclusive`: required evidence is missing, unsupported, ambiguous, or the native readers disagree in ways the audit cannot reconcile.
+
+Separate sections report active turns, all raw response records (including tool calls/results and material omitted by the active reader), rollback markers, instruction context, undo snapshots, other session metadata, and unrecognized records. Undo and other metadata differences remain prominent even when the dialogue is equivalent. Summary counts are per conversation; a conversation with different findings across multiple alternatives is marked inconclusive, with every comparison retained. No message bodies are printed; reports include IDs, paths, counts, hashes, and recovery locations.
+
+For paginated sessions, exports must match the exact thread ID, log path, SHA-256, and complete projection byte offset. Live local history is read from a disposable DB/WAL copy, never by opening the source database in SQLite. The audit pages through full native turns and checks exported turn/item coverage, order, statuses, errors, and payloads. It compares ordered sequences with duplicates intact. Generated user/assistant/reasoning item IDs, turn IDs, and turn timing are excluded from dialogue comparison; command IDs, nested fields, statuses, errors, tool arguments, and results are retained. Missing or changing inputs fail closed.
+
+**Limits:** format-aware comparison currently supports Codex rollout conflicts and requires the Codex CLI (tested with 0.154.0). Claude and other file conflicts are listed as inconclusive. Native legacy readers can omit command items exposed by paginated readers: even if raw response records match, this version reports that mismatch as inconclusive rather than guessing a mapping. Realtime history rows, incomplete projections, differing unknown records, and ambiguous exports also prevent equivalence. The audit cannot prove that external attachments or undo snapshot targets exist. It does not retrieve old exports from Git history or backups if the cached/stored export is unavailable. Close agents for a stable audit; observed source changes abort the report.
+
+Exit status is `0` for a completed, conclusive report (including additional/divergent content), `2` when any comparison is inconclusive/unsupported, and `1` for an input or command error. **No classification authorizes replacing a session or deleting an alternative.** Existing v1 snapshots and conflict folders remain compatible.
 
 ## Paths and configuration
 

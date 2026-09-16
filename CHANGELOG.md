@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 — 2026-09-16
+
+- Add `audit-conflicts` with read-only text/JSON reports grouped by conversation ID, using preserved alternatives and cached snapshots. No source/data migration or automatic conflict resolution.
+- Compare exact-hash-bound paginated exports and legacy sessions through isolated native readers; retain order, duplicate records, statuses, errors, and tool results. Check full exported turn/item coverage and detect incomplete or ambiguous evidence.
+- Report archival response records, rollback markers, instruction context, undo metadata, and unknown records separately. Native representation mismatches remain inconclusive.
+- Read live history through disposable DB/WAL copies and verify source bytes/timestamps remain stable; add synthetic and native regression coverage without model turns.
+
 ## 0.1.2 — 2026-09-16
 
 - Restore saved Codex conversation names through its native metadata API after pull and backup restore, so the resume picker shows transferred titles instead of opening messages.

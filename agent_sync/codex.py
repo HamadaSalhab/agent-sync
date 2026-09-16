@@ -243,7 +243,12 @@ def bootstrap(root):
         "payload": {"id": seed_id, "timestamp": "2026-09-16T00:00:00Z", "cwd": str(native_home),
                     "source": "cli", "originator": "codex_cli_rs", "cli_version": "0.154.0",
                     "model_provider": "openai", "history_mode": "paginated"}}) + "\n")
-    env = dict(os.environ, CODEX_HOME=str(native_home))
+    env = dict(os.environ, CODEX_HOME=str(native_home), HOME=str(native_home),
+               XDG_CONFIG_HOME=str(native_home / "config"), XDG_DATA_HOME=str(native_home / "data"),
+               XDG_CACHE_HOME=str(native_home / "cache"))
+    for key in list(env):
+        if "API_KEY" in key or "TOKEN" in key:
+            env.pop(key)
     proc = subprocess.Popen(["codex", "app-server"], cwd=str(native_home), env=env,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
     try:

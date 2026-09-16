@@ -13,8 +13,11 @@ from .files import SyncError
 
 
 class CodexMetadata:
-    def __init__(self, root):
+    methods = ("initialize", "thread/read", "thread/name/set", "thread/list")
+
+    def __init__(self, root, isolated=False):
         self.root = root
+        self.isolated = isolated
         self.pending = bytearray()
         self.request_id = 0
 
@@ -22,6 +25,9 @@ class CodexMetadata:
         if not shutil.which("codex"):
             raise SyncError("Install Codex CLI to restore saved conversation names, then retry pull/restore.")
         env = dict(os.environ, CODEX_HOME=str(self.root))
+        if self.isolated:
+            env.update(HOME=str(self.root), XDG_CONFIG_HOME=str(self.root / "config"),
+                       XDG_DATA_HOME=str(self.root / "data"), XDG_CACHE_HOME=str(self.root / "cache"))
         for key in list(env):
             if "API_KEY" in key or "TOKEN" in key:
                 env.pop(key)
@@ -40,7 +46,7 @@ class CodexMetadata:
             raise
 
     def call(self, method, params):
-        if method not in ("initialize", "thread/read", "thread/name/set", "thread/list"):
+        if method not in self.methods:
             raise ValueError("Unsupported metadata operation: " + method)
         self.request_id += 1
         try:
@@ -79,3 +85,9 @@ class CodexMetadata:
             proc.stdin.close()
             proc.stdout.close()
         self.errors.close()
+
+
+class CodexReader(CodexMetadata):
+    """Audit client: deliberately cannot rename, resume, or start a turn."""
+
+    methods = ("initialize", "thread/read", "thread/turns/list")

@@ -36,6 +36,9 @@ def parser():
             sub.add_argument("name", help="Backup name from the backups command")
     selection(init)
     subs.add_parser("backups", help="List local backups")
+    audit = subs.add_parser("audit-conflicts", help="Read-only report of preserved conflicts using cached data")
+    selection(audit)
+    audit.add_argument("--json", action="store_true", help="Print a structured report to stdout")
     unlock = subs.add_parser("unlock", help="Unlock an encrypted sync checkout")
     unlock.add_argument("--key-file", type=config.absolute, required=True)
     return p
@@ -136,7 +139,10 @@ def run(args, state):
     cfg = config.load(state)
     repo = state / "repository"
     tools = selected(args, cfg)
-    if args.command == "unlock":
+    if args.command == "audit-conflicts":
+        from .audit import build_report, print_report
+        return print_report(build_report(state, cfg, tools), args.json)
+    elif args.command == "unlock":
         store.crypt(repo, "unlock", str(args.key_file))
         store.validate_repo(repo)
         print("Sync checkout unlocked.")
@@ -215,7 +221,7 @@ def main(argv=None):
     try:
         if not shutil.which("git"):
             raise SyncError("Git is required. Install Git and retry.")
-        if getattr(args, "dry_run", False) or args.command in ("status", "backups"):
+        if getattr(args, "dry_run", False) or args.command in ("status", "backups", "audit-conflicts"):
             return run(args, state)
         with store.locked(state):
             return run(args, state)

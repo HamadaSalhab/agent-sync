@@ -78,7 +78,7 @@ def allowed(tool, relative):
             or parts[0] == "file-history"
             or (parts[0] == "todos" and p.suffix == ".json"))
     if tool == "codex":
-        return relative == "session_index.jsonl" or (
+        return (len(parts) == 3 and parts[0] == ".agent-sync-history" and p.suffix == ".json") or relative == "session_index.jsonl" or (
             len(parts) >= 2 and parts[0] in ("sessions", "archived_sessions")
             and p.suffix == ".jsonl")
     return False
@@ -125,6 +125,9 @@ def collect(root, tool):
             if transcript(tool, rel) or rel in ("history.jsonl", "session_index.jsonl"):
                 json_rows(data, path)
             result[rel] = (data, stamp)
+    if tool == "codex":
+        from .codex import export_history
+        export_history(root, result)
     return result
 
 

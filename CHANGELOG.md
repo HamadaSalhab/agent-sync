@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 — 2026-09-16
+
+- Real-data round-trip testing exposed the need to include Codex paginated history. Added per-thread JSON export of known conversation tables and checksum-bound transactional imports, preserving unrelated local threads.
+- Added native paginated-history, mixed-machine history, missing-store, and thread-identity validation tests.
+- Documented Python 3.12+ for exact nanosecond timestamps on macOS; older runtimes can round to microseconds.
+
 ## 0.1.0 — 2026-09-16
 
 - Forked from porkchop's Claude Code Conversation Sync through HamadaSalhab's modified fork, preserving attribution, MIT license, and Git history.

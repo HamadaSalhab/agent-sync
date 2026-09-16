@@ -1,6 +1,7 @@
 import json
 import os
 import select
+import sqlite3
 import shutil
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import time
 import unittest
 from pathlib import Path
 
-from agent_sync import cli, config, store
+from agent_sync import cli, config, store, codex
 from agent_sync.files import SyncError, collect, digest, encode, merge_file, safe_path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +58,94 @@ class SyncIntegrationTests(unittest.TestCase):
         path.write_bytes(data)
         os.utime(str(path), ns=(stamp, stamp))
         return path
+
+    def seed_paginated(self, machine, thread_id):
+        root = machine / "codex"
+        root.mkdir(parents=True, exist_ok=True)
+        rel = "sessions/2026/09/16/rollout-2026-09-16T00-00-00-{}.jsonl".format(thread_id)
+        data = lines(
+            {"timestamp": "2026-09-16T00:00:00Z", "ordinal": 0, "type": "session_meta", "payload": {
+                "id": thread_id, "timestamp": "2026-09-16T00:00:00Z", "cwd": str(self.root),
+                "originator": "codex_cli_rs", "cli_version": "0.154.0", "source": "cli",
+                "model_provider": "openai", "history_mode": "paginated"}},
+            {"timestamp": "2026-09-16T00:00:01Z", "ordinal": 1, "type": "response_item", "payload": {
+                "type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "Synthetic paginated conversation"}]}},
+            {"timestamp": "2026-09-16T00:00:01Z", "ordinal": 2, "type": "event_msg", "payload": {
+                "type": "user_message", "message": "Synthetic paginated conversation",
+                "images": [], "local_images": [], "text_elements": []}})
+        self.put(machine, "codex", rel, data)
+        tables = {table: [] for table in codex.TABLES}
+        turn = dict.fromkeys(codex.TABLES["thread_turns"])
+        turn.update(thread_id=thread_id, turn_id="turn-1", rollout_ordinal=1, status="completed",
+                    first_user_item_id="item-1", rollout_byte_offset=0, rollout_end_ordinal=2,
+                    rollout_end_byte_offset=len(data))
+        tables["thread_turns"] = [turn]
+        tables["thread_items"] = [{"thread_id": thread_id, "turn_id": "turn-1", "item_id": "item-1",
+            "rollout_ordinal": 1, "created_at_ms": 1789516801000, "updated_at_ordinal": 1,
+            "item_type": "userMessage", "item_json": json.dumps({"type": "userMessage", "id": "item-1",
+                "clientId": None, "content": [{"type": "text", "text": "Synthetic paginated conversation", "text_elements": []}]})}]
+        tables["thread_history_projection_state"] = [{"thread_id": thread_id,
+                    "next_rollout_byte_offset": len(data), "next_rollout_ordinal": 3}]
+        with sqlite3.connect(str(root / codex.DB_NAME)) as db:
+            for table, fields in codex.TABLES.items():
+                numeric = {"rollout_ordinal", "started_at", "completed_at", "duration_ms", "rollout_byte_offset",
+                    "rollout_end_ordinal", "rollout_end_byte_offset", "created_at_ms", "updated_at_ordinal",
+                    "next_rollout_byte_offset", "next_rollout_ordinal"}
+                key = {"thread_turns": "thread_id,turn_id", "thread_items": "thread_id,turn_id,item_id",
+                       "thread_history_projection_state": "thread_id", "thread_realtime_items": "thread_id,item_id"}[table]
+                db.execute('CREATE TABLE IF NOT EXISTS "{}" ({}, PRIMARY KEY ({}))'.format(table,
+                    ",".join('"{}" {}'.format(f, "INTEGER" if f in numeric else "TEXT") for f in fields), key))
+            codex.write_rows(db, [{"thread_id": thread_id, "tables": tables}])
+        return rel, data
+
+    def test_paginated_history_round_trip_preserves_other_threads(self):
+        a_id = "11111111-1111-4111-8111-111111111111"
+        b_id = "22222222-2222-4222-8222-222222222222"
+        self.seed_paginated(self.a, a_id)
+        self.seed_paginated(self.b, b_id)
+        self.command(self.a, "push", "--tool", "codex")
+        self.command(self.b, "pull", "--tool", "codex")
+        with sqlite3.connect(str(self.b / "codex" / codex.DB_NAME)) as db:
+            self.assertEqual({r[0] for r in db.execute("SELECT thread_id FROM thread_turns")}, {a_id, b_id})
+            self.assertEqual(db.execute("SELECT count(*) FROM thread_items").fetchone()[0], 2)
+        tracked = store.git(self.a / "state/repository", "ls-files").stdout
+        self.assertIn(".agent-sync-history/", tracked)
+        self.assertNotIn(".sqlite", tracked)
+        self.command(self.b, "push", "--tool", "codex")
+        self.command(self.a, "pull", "--tool", "codex")
+        self.command(self.a, "backup", "--tool", "codex")
+        name = self.command(self.a, "backups").stdout.strip().splitlines()[-1]
+        self.command(self.a, "restore", name, "--tool", "codex")
+        with sqlite3.connect(str(self.a / "codex" / codex.DB_NAME)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM thread_items").fetchone()[0], 2)
+
+    def test_paginated_missing_database_fails_before_push(self):
+        rel, data = self.seed_paginated(self.a, "11111111-1111-4111-8111-111111111111")
+        (self.a / "codex" / codex.DB_NAME).unlink()
+        result = self.command(self.a, "push", code=1)
+        self.assertIn("complete backup", result.stderr)
+
+    def test_paginated_export_cannot_modify_unrelated_thread(self):
+        rel, data = self.seed_paginated(self.a, "11111111-1111-4111-8111-111111111111")
+        files = collect(self.a / "codex", "codex")
+        name = next(p for p in files if p.startswith(codex.EXPORT_DIR))
+        obj = json.loads(files[name][0])
+        obj["tables"]["thread_items"][0]["thread_id"] = "unrelated"
+        with self.assertRaises(SyncError):
+            codex.validate_export(name, encode(obj))
+
+    def test_paginated_rollout_without_export_is_rejected(self):
+        rel, data = self.seed_paginated(self.a, "11111111-1111-4111-8111-111111111111")
+        with self.assertRaises(SyncError):
+            codex.matching_exports(self.b / "codex", {rel: data})
+
+    def test_paginated_duplicate_rollouts_share_one_history_import(self):
+        rel, data = self.seed_paginated(self.a, "11111111-1111-4111-8111-111111111111")
+        self.put(self.a, "codex", rel.replace("00-00-00", "00-01-00"), data + b"\n")
+        files = collect(self.a / "codex", "codex")
+        exports = codex.matching_exports(self.b / "codex", {p: v[0] for p, v in files.items()})
+        self.assertEqual(len(exports), 1)
 
     def test_two_tools_two_machines_round_trip_preserves_mtimes_and_secrets(self):
         claude = lines({"type": "user", "message": "hello"})
@@ -246,7 +335,7 @@ class SyncIntegrationTests(unittest.TestCase):
         self.assertFalse((self.root / "c/state/config.json").exists())
 
     @unittest.skipUnless(shutil.which("codex"), "Codex CLI is not installed")
-    def test_native_codex_discovers_and_reads_transferred_session(self):
+    def test_native_codex_discovers_and_reads_transferred_session(self, paginated=False):
         session_id = "11111111-1111-4111-8111-111111111111"
         data = lines(
             {"timestamp": "2026-09-16T00:00:00Z", "type": "session_meta", "payload": {
@@ -261,6 +350,9 @@ class SyncIntegrationTests(unittest.TestCase):
                 "images": [], "local_images": [], "text_elements": []}})
         rel = "sessions/2026/09/16/rollout-2026-09-16T00-00-00-{}.jsonl".format(session_id)
         self.put(self.a, "codex", rel, data)
+        if paginated:
+            codex.bootstrap(self.a / "codex")
+            self.seed_paginated(self.a, session_id)
         self.command(self.a, "push", "--tool", "codex")
         self.command(self.b, "pull", "--tool", "codex")
         env = dict(self.env, CODEX_HOME=str(self.b / "codex"), HOME=str(self.b))
@@ -290,12 +382,16 @@ class SyncIntegrationTests(unittest.TestCase):
             self.fail("Codex app-server timed out on " + method)
 
         try:
-            call(1, "initialize", {"clientInfo": {"name": "agent_sync_test", "version": "0.1.0"}})
+            call(1, "initialize", {"clientInfo": {"name": "agent_sync_test", "version": "0.1.1"}, "capabilities": {"experimentalApi": True}})
             proc.stdin.write(b'{"method":"initialized"}\n')
             threads = call(2, "thread/list", {"limit": 100, "useStateDbOnly": False})
             self.assertIn(session_id, [t["id"] for t in threads["data"]])
             thread = call(3, "thread/read", {"threadId": session_id, "includeTurns": True})["thread"]
-            self.assertIn("Synthetic agent-sync verification.", json.dumps(thread["turns"]))
+            if paginated:
+                page = call(4, "thread/turns/list", {"threadId": session_id, "limit": 10, "itemsView": "full"})
+                self.assertIn("Synthetic paginated conversation", json.dumps(page["data"]))
+            else:
+                self.assertIn("Synthetic agent-sync verification.", json.dumps(thread["turns"]))
             self.assertEqual(thread["id"], session_id)
         finally:
             proc.terminate()
@@ -306,6 +402,10 @@ class SyncIntegrationTests(unittest.TestCase):
                 proc.wait(timeout=5)
             proc.stdin.close()
             proc.stdout.close()
+
+    @unittest.skipUnless(shutil.which("codex"), "Codex CLI is not installed")
+    def test_native_codex_reads_paginated_history(self):
+        self.test_native_codex_discovers_and_reads_transferred_session(paginated=True)
 
     @unittest.skipUnless(shutil.which("git-crypt"), "git-crypt is not installed")
     def test_encryption_round_trip_and_locked_checkout(self):

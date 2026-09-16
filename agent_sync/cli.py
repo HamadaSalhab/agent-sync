@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from . import config, store
+from . import config, store, codex
 from .files import (SyncError, atomic_write, collect, digest, merge_file,
                     read_stable, safe_path)
 
@@ -57,9 +57,13 @@ def plan_pull(repo, cfg, tools):
     plan = []
     for tool in tools:
         root = Path(cfg[tool + "_dir"])
+        local_exports = collect(root, tool) if tool == "codex" else {}
         for rel, versions in sorted(incoming[tool].items()):
             target = safe_path(root, rel)
-            local = read_stable(target) if target.exists() else None
+            if tool == "codex" and rel.startswith(codex.EXPORT_DIR + "/"):
+                local = local_exports.get(rel)
+            else:
+                local = read_stable(target) if target.exists() else None
             data, stamp, alternatives = merge_file(tool, rel, versions, local)
             changed = local is None or local[0] != data
             plan.append((tool, rel, data, stamp, alternatives, changed, local))
@@ -69,6 +73,9 @@ def plan_pull(repo, cfg, tools):
 def apply_pull(state, cfg, tools, plan, dry_run=False):
     changes = sum(item[5] for item in plan)
     conflicts = sum(bool(item[4]) for item in plan)
+    future_codex = {rel: data for tool, rel, data, _, _, _, _ in plan if tool == "codex"}
+    codex_root = Path(cfg["codex_dir"])
+    exports = codex.matching_exports(codex_root, future_codex)
     print("{} files to update; {} files with divergent versions.".format(changes, conflicts))
     if dry_run:
         for tool, rel, _, _, alt, changed, _ in plan:
@@ -79,10 +86,15 @@ def apply_pull(state, cfg, tools, plan, dry_run=False):
         return 0
     saved = store.backup(state, cfg, tools)
     print("Backup: {}".format(saved))
+    codex.prepare_import(codex_root, exports)
     # Refuse to overwrite any file changed since the plan was built.
+    current_exports = collect(codex_root, "codex") if exports else {}
     for tool, rel, _, _, _, _, local in plan:
         target = safe_path(Path(cfg[tool + "_dir"]), rel)
-        now = read_stable(target) if target.exists() else None
+        if tool == "codex" and rel.startswith(codex.EXPORT_DIR + "/"):
+            now = current_exports.get(rel)
+        else:
+            now = read_stable(target) if target.exists() else None
         if now != local:
             raise SyncError("Local data changed during pull; close the agent and retry: {}".format(target))
     for tool, rel, data, stamp, alternatives, changed, _ in plan:
@@ -97,6 +109,9 @@ def apply_pull(state, cfg, tools, plan, dry_run=False):
             atomic_write(safe_path(Path(cfg[tool + "_dir"]), rel), data, stamp)
         if alternatives:
             print("CONFLICT: {}/{}; alternatives saved under {}".format(tool, rel, state / "conflicts"))
+    codex.import_history(codex_root, exports)
+    if exports:
+        print("Restored paginated Codex history for {} sessions.".format(len(exports)))
     if conflicts:
         print("Review saved alternatives; your existing version was kept where present.")
     return 2 if conflicts else 0
@@ -170,12 +185,15 @@ def run(args, state):
         files = store.backup_files(state, args.name, tools)
         for tool, rel, _, _ in files:
             safe_path(Path(cfg[tool + "_dir"]), rel)
+        exports = codex.matching_exports(Path(cfg["codex_dir"]), {rel: data for tool, rel, data, _ in files if tool == "codex"})
         print("{} files to restore; other files are retained.".format(len(files)))
         if args.dry_run or not files:
             return 0
         print("Safety backup: {}".format(store.backup(state, cfg, tools)))
+        codex.prepare_import(Path(cfg["codex_dir"]), exports)
         for tool, rel, data, stamp in files:
             atomic_write(safe_path(Path(cfg[tool + "_dir"]), rel), data, stamp)
+        codex.import_history(Path(cfg["codex_dir"]), exports)
         print("Restore complete.")
     return 0
 

@@ -4,11 +4,11 @@ Sync **Claude Code and Codex conversations across your computers** through one p
 
 > **Fork attribution:** agent-sync is a fork and evolution of [Claude Code Conversation Sync](https://github.com/porkchop/claude-code-sync), created by **[porkchop](https://github.com/porkchop)** and its contributors. It builds on [HamadaSalhab's modified fork](https://github.com/HamadaSalhab/claude-code-sync). The original project established the Git-based conversation sync, backup, and encryption workflow. This repository preserves its Git history and original MIT copyright notice. Thank you to the original author and contributors. See [NOTICE.md](NOTICE.md).
 
-**Version 0.1.0:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
+**Version 0.1.1:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
 
 ## Install
 
-Requires **Python 3.8+** and **Git**. No third-party Python runtime packages, API key, or paid service is required by agent-sync. A supported Python release is recommended for daily use. Optional encryption requires `git-crypt`.
+Requires **Python 3.8+** and **Git**. Use **Python 3.12+** for full nanosecond timestamp precision on macOS; older Python builds can round restored times down to microseconds. No third-party Python runtime packages, API key, or paid service is required by agent-sync. Optional encryption requires `git-crypt`. Restoring paginated Codex sessions on a new machine also requires the Codex CLI to initialize its local history schema.
 
 From this source checkout:
 
@@ -29,7 +29,7 @@ The examples below assume `agent-sync` is on your `PATH`.
 
 ## First machine
 
-Create an **empty private Git repository** for conversation data on your preferred Git host. Keep it separate from this public source-code repository. Then:
+Create an **empty private Git repository** for conversation data on your preferred Git host. Keep it separate from the tool's source-code repository. Then:
 
 ```bash
 agent-sync init --remote git@github.com:YOUR_USERNAME/agent-conversations.git
@@ -109,16 +109,19 @@ Dry runs perform **no fetch, write, commit, or push**. Pull previews use the alr
 | Codex | `sessions/**/*.jsonl`, `archived_sessions/**/*.jsonl` | Native session logs |
 | Codex | `history.jsonl` | Deduplicate complete records and order by timestamp |
 | Codex | `session_index.jsonl` | Merge by session ID, keeping the latest named entry |
+| Codex | Per-thread JSON exports from `thread_history_1.sqlite` | Preserve paginated conversation turns and items; bind each export to its session-log checksum |
 
-Credentials, `auth.json`, SQLite databases and their WAL files, caches, logs, browser data, settings, plugins, skills, rules, memories, and project source files are outside this release's allowlist. A conversation or saved file edit can itself contain secrets; the allowlist does not redact message contents.
+Credentials, `auth.json`, SQLite database files and their WAL files, caches, logs, browser data, settings, plugins, skills, rules, memories, and project source files are outside this release's allowlist. The Codex adapter exports only selected conversation rows, not complete databases. A conversation or saved file edit can itself contain secrets; the allowlist does not redact message contents.
 
 ### Codex compatibility
 
-Codex stores its local data under `CODEX_HOME`, normally `~/.codex`. The syncer transfers session logs and history while letting Codex manage its own databases. Its native `thread/list` operation supports scanning session logs and repairing metadata (`useStateDbOnly: false`). See the official [state-location documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#config-and-state-locations) and [App Server documentation](https://learn.chatgpt.com/docs/app-server).
+Codex stores its local data under `CODEX_HOME`, normally `~/.codex`. Its native `thread/list` operation supports scanning session logs and repairing metadata (`useStateDbOnly: false`). See the official [state-location documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#config-and-state-locations) and [App Server documentation](https://learn.chatgpt.com/docs/app-server).
 
-The native integration test uses an isolated Codex home, discovers a transferred session with `thread/list`, and reads its conversation with `thread/read`. It sends no model prompt and requires no credentials. Verified locally with **Codex CLI 0.154.0**. Run this test against your installed version before relying on a different session format.
+For **paginated** sessions, logs alone are insufficient. agent-sync reads the history store in a consistent read-only transaction and exports each thread's turns, items, realtime items, and projection position as JSON under `.agent-sync-history/`. Each export references the exact log checksum. On pull, Codex initializes a new machine's schema, then agent-sync validates and imports only matching threads in one SQLite transaction. Other threads are retained. Unknown schemas, missing history, or mismatched exports stop the operation. This adapter depends on internal Codex schema version 1 and is experimental.
 
-Full desktop-app state synchronization is outside v0.1: pins, project organization, running tasks, attachments stored outside session logs, and database-only history are not copied. A desktop build may have additional discovery requirements; desktop UI visibility and interactive continuation are not covered by the automated tests.
+Native integration tests cover both legacy `thread/read` and paginated `thread/turns/list` using isolated Codex homes. They send no model prompt and require no credentials. Compatibility is tested with **Codex CLI 0.154.0**. Run these tests against your installed version before relying on a different session format.
+
+Full desktop-app state synchronization is outside v0.1: pins, project organization, running tasks, attachments stored outside session logs, and sessions without supported local logs are not copied. A desktop build may have additional discovery requirements; desktop UI visibility and interactive continuation are not covered by the automated tests.
 
 ## How conflicts work
 
@@ -183,7 +186,7 @@ agent-sync restore BACKUP_NAME --dry-run
 agent-sync restore BACKUP_NAME
 ```
 
-Backups contain only supported conversation files and a checksum manifest. Restore makes another safety backup first, then replaces the backed-up files while retaining unrelated files. Backups and conflict copies are local and **unencrypted**, even when the Git remote uses git-crypt. They are stored under a private state directory with owner-only permissions. There is no automatic retention cleanup in v0.1; remove old backups manually after verifying your recovery copies.
+Backups contain supported conversation files, portable Codex history exports, and a checksum manifest. Restore makes another safety backup first, then replaces the backed-up files and matching history rows while retaining unrelated conversations. Backups and conflict copies are local and **unencrypted**, even when the Git remote uses git-crypt. They are stored under a private state directory with owner-only permissions. There is no automatic retention cleanup in v0.1; remove old backups manually after verifying your recovery copies.
 
 ## Migrating from claude-code-sync
 

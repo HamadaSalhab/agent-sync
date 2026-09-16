@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from agent_sync import cli, config, store, codex
@@ -406,6 +407,80 @@ class SyncIntegrationTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("codex"), "Codex CLI is not installed")
     def test_native_codex_reads_paginated_history(self):
         self.test_native_codex_discovers_and_reads_transferred_session(paginated=True)
+
+    @unittest.skipUnless(shutil.which("codex"), "Codex CLI is not installed")
+    def test_native_names_pull_retry_restore_and_newer_local_name(self):
+        from agent_sync.native import CodexMetadata
+        thread_id = "11111111-1111-4111-8111-111111111111"
+        codex.bootstrap(self.a / "codex")
+        rel, rollout = self.seed_paginated(self.a, thread_id)
+        self.put(self.a, "codex", "session_index.jsonl", lines(
+            {"id": thread_id, "thread_name": "Remote older name", "updated_at": "2026-01-01T00:00:00Z"}))
+        self.put(self.b, "codex", "session_index.jsonl", lines(
+            {"id": thread_id, "thread_name": "Local newer name", "updated_at": "2026-02-01T00:00:00Z"},
+            {"id": "22222222-2222-4222-8222-222222222222", "thread_name": "No rollout", "updated_at": "2026-01-01T00:00:00Z"}))
+        self.command(self.a, "push", "--tool", "codex")
+        self.command(self.b, "pull", "--tool", "codex")
+        root = self.b / "codex"
+
+        def assert_name(expected):
+            with CodexMetadata(root) as native:
+                thread = native.call("thread/read", {"threadId": thread_id, "includeTurns": False})["thread"]
+                self.assertEqual(thread["name"], expected)
+                page = native.call("thread/list", {"limit": 100, "useStateDbOnly": False})
+                self.assertEqual(next(t for t in page["data"] if t["id"] == thread_id)["name"], expected)
+
+        assert_name("Local newer name")
+        index = root / "session_index.jsonl"
+        original = (index.read_bytes(), index.stat().st_mtime_ns)
+        self.assertEqual(json.loads(original[0].splitlines()[-1])["updated_at"], "2026-02-01T00:00:00Z")
+        # Reproduce an existing 0.1.1 restore: index present, native name absent.
+        with sqlite3.connect(str(root / "state_5.sqlite")) as db:
+            db.execute("UPDATE threads SET name=NULL WHERE id=?", (thread_id,))
+        self.command(self.b, "pull", "--tool", "codex", "--dry-run")
+        with sqlite3.connect(str(root / "state_5.sqlite")) as db:
+            self.assertIsNone(db.execute("SELECT name FROM threads WHERE id=?", (thread_id,)).fetchone()[0])
+        self.command(self.b, "pull", "--tool", "codex")
+        assert_name("Local newer name")
+        self.assertEqual((index.read_bytes(), index.stat().st_mtime_ns), original)
+        self.assertEqual(codex.restore_names(root), 0)
+
+        self.command(self.b, "backup", "--tool", "codex")
+        backup = self.command(self.b, "backups").stdout.strip().splitlines()[-1]
+        self.put(self.a, "codex", "session_index.jsonl", lines(
+            {"id": thread_id, "thread_name": "Remote newer name", "updated_at": "2026-03-01T00:00:00Z"}))
+        self.command(self.a, "push", "--tool", "codex")
+        self.command(self.b, "pull", "--tool", "codex")
+        assert_name("Remote newer name")
+        self.command(self.b, "restore", backup, "--tool", "codex")
+        assert_name("Local newer name")
+        self.assertEqual((index.read_bytes(), index.stat().st_mtime_ns), original)
+        self.assertEqual((root / rel).read_bytes(), rollout)
+        with mock.patch("agent_sync.native.shutil.which", return_value=None):
+            with self.assertRaisesRegex(SyncError, "Install Codex CLI"):
+                codex.restore_names(root)
+        self.assertEqual((index.read_bytes(), index.stat().st_mtime_ns), original)
+
+    @unittest.skipUnless(shutil.which("codex"), "Codex CLI is not installed")
+    def test_native_names_legacy_and_archived_sessions(self):
+        from agent_sync.native import CodexMetadata
+        thread_id = "11111111-1111-4111-8111-111111111111"
+        rel = "archived_sessions/rollout-2026-09-16T00-00-00-{}.jsonl".format(thread_id)
+        rollout = lines({"timestamp": "2026-09-16T00:00:00Z", "type": "session_meta", "payload": {
+            "id": thread_id, "timestamp": "2026-09-16T00:00:00Z", "cwd": str(self.root),
+            "source": "cli", "originator": "codex_cli_rs", "cli_version": "0.154.0", "model_provider": "openai"}},
+            {"timestamp": "2026-09-16T00:00:01Z", "type": "event_msg", "payload": {
+                "type": "user_message", "message": "Synthetic archived session", "images": [], "local_images": []}})
+        self.put(self.a, "codex", rel, rollout)
+        self.put(self.a, "codex", "session_index.jsonl", lines(
+            {"id": thread_id, "thread_name": "Latest saved name", "updated_at": "2026-02-01T00:00:00Z"},
+            {"id": thread_id, "thread_name": "Old name at end of index", "updated_at": "2026-01-01T00:00:00Z"}))
+        self.command(self.a, "push", "--tool", "codex")
+        self.command(self.b, "pull", "--tool", "codex")
+        with CodexMetadata(self.b / "codex") as native:
+            thread = native.call("thread/read", {"threadId": thread_id, "includeTurns": False})["thread"]
+            self.assertEqual(thread["name"], "Latest saved name")
+        self.assertEqual((self.b / "codex" / rel).read_bytes(), rollout)
 
     @unittest.skipUnless(shutil.which("git-crypt"), "git-crypt is not installed")
     def test_encryption_round_trip_and_locked_checkout(self):

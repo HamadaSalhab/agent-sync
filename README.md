@@ -4,11 +4,11 @@ Sync **Claude Code and Codex conversations across your computers** through one p
 
 > **Fork attribution:** agent-sync is a fork and evolution of [Claude Code Conversation Sync](https://github.com/porkchop/claude-code-sync), created by **[porkchop](https://github.com/porkchop)** and its contributors. It builds on [HamadaSalhab's modified fork](https://github.com/HamadaSalhab/claude-code-sync). The original project established the Git-based conversation sync, backup, and encryption workflow. This repository preserves its Git history and original MIT copyright notice. Thank you to the original author and contributors. See [NOTICE.md](NOTICE.md).
 
-**Version 0.1.1:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
+**Version 0.1.2:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
 
 ## Install
 
-Requires **Python 3.8+** and **Git**. Use **Python 3.12+** for full nanosecond timestamp precision on macOS; older Python builds can round restored times down to microseconds. No third-party Python runtime packages, API key, or paid service is required by agent-sync. Optional encryption requires `git-crypt`. Restoring paginated Codex sessions on a new machine also requires the Codex CLI to initialize its local history schema.
+Requires **Python 3.8+** and **Git**. Use **Python 3.12+** for full nanosecond timestamp precision on macOS; older Python builds can round restored times down to microseconds. No third-party Python runtime packages, API key, or paid service is required by agent-sync. Optional encryption requires `git-crypt`. Restoring paginated Codex sessions or saved conversation names also requires the Codex CLI for its native history schema and metadata operations.
 
 From this source checkout:
 
@@ -108,7 +108,7 @@ Dry runs perform **no fetch, write, commit, or push**. Pull previews use the alr
 | Claude Code | `history.jsonl` | Deduplicate complete records and order by timestamp |
 | Codex | `sessions/**/*.jsonl`, `archived_sessions/**/*.jsonl` | Native session logs |
 | Codex | `history.jsonl` | Deduplicate complete records and order by timestamp |
-| Codex | `session_index.jsonl` | Merge by session ID, keeping the latest named entry |
+| Codex | `session_index.jsonl` | Merge by session ID, keeping the latest named entry; restore native picker names on pull/restore |
 | Codex | Per-thread JSON exports from `thread_history_1.sqlite` | Preserve paginated conversation turns and items; bind each export to its session-log checksum |
 
 Credentials, `auth.json`, SQLite database files and their WAL files, caches, logs, browser data, settings, plugins, skills, rules, memories, and project source files are outside this release's allowlist. The Codex adapter exports only selected conversation rows, not complete databases. A conversation or saved file edit can itself contain secrets; the allowlist does not redact message contents.
@@ -120,6 +120,8 @@ Codex stores its local data under `CODEX_HOME`, normally `~/.codex`. Its native 
 For **paginated** sessions, logs alone are insufficient. agent-sync reads the history store in a consistent read-only transaction and exports each thread's turns, items, realtime items, and projection position as JSON under `.agent-sync-history/`. Each export references the exact log checksum. On pull, Codex initializes a new machine's schema, then agent-sync validates and imports only matching threads in one SQLite transaction. Other threads are retained. Unknown schemas, missing history, or mismatched exports stop the operation. This adapter depends on internal Codex schema version 1 and is experimental.
 
 Native integration tests cover both legacy `thread/read` and paginated `thread/turns/list` using isolated Codex homes. They send no model prompt and require no credentials. Compatibility is tested with **Codex CLI 0.154.0**. Run these tests against your installed version before relying on a different session format.
+
+Saved names are applied through Codex's `thread/name/set` metadata operation after restoring files and history. The merged index determines the name, so newer local renames win over older remote entries. Native rename timestamps are not allowed to replace the original index timestamps. Names for sessions without supported local logs are retained in the index but not applied. This also repairs names imported with 0.1.1: close the agents and run `agent-sync pull --tool codex` again, then reopen the resume picker. Native name restoration does not start a model turn.
 
 Full desktop-app state synchronization is outside v0.1: pins, project organization, running tasks, attachments stored outside session logs, and sessions without supported local logs are not copied. A desktop build may have additional discovery requirements; desktop UI visibility and interactive continuation are not covered by the automated tests.
 
@@ -201,6 +203,7 @@ The original flat conversation-repository layout is not accepted by agent-sync. 
 - **Encrypted checkout is locked:** run `agent-sync unlock --key-file /path/to/key`.
 - **Malformed or changing JSONL:** close the agent and retry. Partial conversation writes are rejected before snapshot publication.
 - **Missing conversations:** restart the agent; in Codex try `codex resume --all`. Check project paths and the compatibility limitations above.
+- **Codex shows opening messages instead of saved titles:** upgrade to 0.1.2+, close the agents, and pull again. Name repair runs even if the conversation files are already current. If the native metadata service fails, the command reports the error; completed file restoration and its safety backup are retained, and another pull retries name repair.
 - **A new machine has no agent data directory:** pull creates directories for transferred files. Push skips missing directories.
 
 Exit codes: `0` success, `1` error, `2` preserved conflicts, `130` interrupted. Argument parsing also uses `2` for invalid command-line arguments.

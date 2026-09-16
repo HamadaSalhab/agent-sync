@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 — 2026-09-16
+
+- Restore saved Codex conversation names through its native metadata API after pull and backup restore, so the resume picker shows transferred titles instead of opening messages.
+- Repair names on repeated pulls even when conversation files are already current. Use the latest merged index entry, preserving newer local names and original rename timestamps; skip index entries without a supported local session log.
+- Add native tests for picker names, older/newer remote names, metadata repair retries, dry-run behavior, backup restoration, archived legacy sessions, and missing Codex CLI errors. These tests run locally without model turns.
+
 ## 0.1.1 — 2026-09-16
 
 - Real-data round-trip testing exposed the need to include Codex paginated history. Added per-thread JSON export of known conversation tables and checksum-bound transactional imports, preserving unrelated local threads.

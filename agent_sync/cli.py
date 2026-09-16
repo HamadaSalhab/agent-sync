@@ -83,6 +83,12 @@ def apply_pull(state, cfg, tools, plan, dry_run=False):
                 print("  {} {}/{}".format("CONFLICT" if alt else "UPDATE", tool, rel))
         return 2 if conflicts else 0
     if not changes and not conflicts:
+        # A previous release may have copied the index without hydrating native
+        # picker names. Retry metadata restoration even on a file-level no-op.
+        names = codex.saved_names(codex_root) if "codex" in tools else {}
+        if names:
+            print("Backup: {}".format(store.backup(state, cfg, tools)))
+            print("Restored Codex names for {} sessions.".format(codex.restore_names(codex_root, names)))
         return 0
     saved = store.backup(state, cfg, tools)
     print("Backup: {}".format(saved))
@@ -112,6 +118,8 @@ def apply_pull(state, cfg, tools, plan, dry_run=False):
     codex.import_history(codex_root, exports)
     if exports:
         print("Restored paginated Codex history for {} sessions.".format(len(exports)))
+    if "codex" in tools:
+        print("Restored Codex names for {} sessions.".format(codex.restore_names(codex_root)))
     if conflicts:
         print("Review saved alternatives; your existing version was kept where present.")
     return 2 if conflicts else 0
@@ -194,6 +202,8 @@ def run(args, state):
         for tool, rel, data, stamp in files:
             atomic_write(safe_path(Path(cfg[tool + "_dir"]), rel), data, stamp)
         codex.import_history(Path(cfg["codex_dir"]), exports)
+        if "codex" in tools:
+            print("Restored Codex names for {} sessions.".format(codex.restore_names(Path(cfg["codex_dir"]))))
         print("Restore complete.")
     return 0
 

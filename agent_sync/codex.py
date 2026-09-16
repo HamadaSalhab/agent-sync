@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .files import SyncError, digest, encode, safe_path
+from .files import SyncError, atomic_write, digest, encode, json_rows, read_stable, row_time, safe_path
 
 DB_NAME = "thread_history_1.sqlite"
 EXPORT_DIR = ".agent-sync-history"
@@ -30,6 +30,66 @@ TABLES = {
     "thread_history_projection_state": ("thread_id", "next_rollout_byte_offset", "next_rollout_ordinal"),
     "thread_realtime_items": ("thread_id", "item_id", "rollout_ordinal", "created_at_ms", "item_type", "item_json"),
 }
+
+
+def saved_names(root):
+    """Latest indexed name for each session with a supported local rollout."""
+    index = safe_path(root, "session_index.jsonl")
+    if not index.is_file():
+        return {}
+    names = {}
+    for row in json_rows(index.read_bytes(), index):
+        thread_id, name = row.get("id"), row.get("thread_name")
+        if not isinstance(thread_id, str) or not isinstance(name, str) or not name.strip():
+            continue
+        previous = names.get(thread_id)
+        if previous is None or (row_time(row), json.dumps(row, sort_keys=True)) > (
+                row_time(previous), json.dumps(previous, sort_keys=True)):
+            names[thread_id] = row
+    if not names:
+        return {}
+    present = set()
+    for directory in ("sessions", "archived_sessions"):
+        folder = safe_path(root, directory)
+        for path in folder.rglob("*.jsonl"):
+            path = safe_path(root, path.relative_to(root).as_posix())
+            with path.open("rb") as stream:
+                meta = json.loads(stream.readline()).get("payload", {})
+            if meta.get("id") in names:
+                present.add(meta["id"])
+    return {thread_id: names[thread_id]["thread_name"] for thread_id in sorted(present)}
+
+
+def restore_names(root, names=None):
+    """Hydrate native picker names from the merged index without re-dating it.
+
+    Pull has already selected the latest index entries across both machines.
+    Native rename also appends to that index with today's timestamp, so retain
+    the original bytes/time to avoid turning an old imported name into a new
+    rename that could win a subsequent merge. Call only with agents closed.
+    """
+    names = saved_names(root) if names is None else names
+    if not names:
+        return 0
+    from .native import CodexMetadata
+    index = safe_path(root, "session_index.jsonl")
+    original, stamp = read_stable(index)
+    changed = 0
+    try:
+        with CodexMetadata(root) as native:
+            for thread_id, name in names.items():
+                thread = native.call("thread/read", {"threadId": thread_id, "includeTurns": False})["thread"]
+                if thread.get("name") == name:
+                    continue
+                native.call("thread/name/set", {"threadId": thread_id, "name": name})
+                updated = native.call("thread/read", {"threadId": thread_id, "includeTurns": False})["thread"]
+                if updated.get("name") != name:
+                    raise SyncError("Codex did not restore the saved name for " + thread_id)
+                changed += 1
+    finally:
+        if read_stable(index) != (original, stamp):
+            atomic_write(index, original, stamp)
+    return changed
 
 
 def check_schema(connection):

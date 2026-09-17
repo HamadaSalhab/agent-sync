@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5 — 2026-09-17
+
+- Recognize exact double-newline and AGENTS.md initial instruction envelopes without stripping instruction content. Normalize nonconflicting `sandbox_policy.mode`/`type` aliases only within sandbox policies.
+- Verify legacy image-URL representations against native image items, retaining URL bytes, order, detail, and unknown fields. Unsupported events remain inconclusive.
+- Separate session instruction-text coverage from ordered per-turn context evidence, including field-level counts for retained truncation policies and per-turn instructions. Preserve the combined classification and raw storage evidence.
+- Add wrapper, policy, image, context-retention, and isolated native-image regressions. No sync policy, data format, configuration, or identity changes.
+
 ## 0.1.4 — 2026-09-17
 
 - Compare instruction coverage across null fields, legacy instruction strings, text wrappers, and exact initial instruction carriers; retain raw storage evidence and meaningful context differences.

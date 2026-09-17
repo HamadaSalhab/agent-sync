@@ -83,6 +83,121 @@ class MigrationAuditTests(unittest.TestCase):
         return {'type': 'event_msg', 'payload': dict(type='item_completed', thread_id=base.TID,
                 turn_id=turn_id, item=item, completed_at_ms=123, **extras)}
 
+    def instruction_pair(self, text, carrier):
+        a, b = copy.deepcopy(self.case.rows), copy.deepcopy(self.case.rows)
+        a[0]['payload']['instructions'] = text
+        message = {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                   'content': [{'type': 'input_text', 'text': carrier}]}}
+        a.insert(1, message); b.insert(1, copy.deepcopy(message))
+        return a, b
+
+    def test_exact_double_newline_and_agents_envelopes_preserve_body_whitespace(self):
+        for body in ('Exact instructions', '\n  Leading spaces\nTrailing spaces  \n\n'):
+            for prefix, suffix in [('<user_instructions>\n\n', '\n\n</user_instructions>'),
+                    ('# AGENTS.md instructions for /synthetic/path with spaces\n\n<INSTRUCTIONS>\n', '\n</INSTRUCTIONS>')]:
+                with self.subTest(body=repr(body), prefix=prefix):
+                    a, b = self.instruction_pair(body, prefix + body + suffix)
+                    result = self.compare(a, b)
+                    self.assertEqual(result['classification'], 'equivalent_content')
+                    self.assertEqual(result['sections']['session_instructions']['relation'], 'equal')
+                    self.assertEqual(result['sections']['session_instructions']['covered_elsewhere']['local_count'], 1)
+                    changed = self.instruction_pair(body, prefix + body.replace('instructions', 'different instructions') + 'X' + suffix)
+                    self.assertEqual(self.compare(*changed)['classification'], 'local_additional_content')
+
+    def test_carrier_envelope_does_not_strip_or_accept_surrounding_dialogue(self):
+        body = '  Indentation matters  '
+        prefix = '# AGENTS.md instructions for /project\n\n<INSTRUCTIONS>\n'
+        suffix = '\n</INSTRUCTIONS>'
+        for carrier in [prefix + body.strip() + suffix,
+                        'Please quote:\n' + prefix + body + suffix,
+                        prefix + body + suffix + '\nThen answer this question',
+                        '# AGENTS.md instructions for \n\n<INSTRUCTIONS>\n' + body + suffix,
+                        '<user_instructions>\n\n' + body.strip() + '\n\n</user_instructions>']:
+            self.assertEqual(self.compare(*self.instruction_pair(body, carrier))['classification'], 'local_additional_content')
+
+    def test_sandbox_alias_only_merges_equal_nonconflicting_values(self):
+        for left, right, expected in [
+                ({'mode': 'read-only'}, {'type': 'read-only'}, 'equal'),
+                ({'mode': 'read-only', 'type': 'read-only'}, {'type': 'read-only'}, 'equal'),
+                ({'mode': 'read-only'}, {'type': 'workspace-write'}, 'divergent'),
+                ({'mode': 'read-only', 'type': 'workspace-write'}, {'type': 'workspace-write'}, 'divergent'),
+                ({'mode': 'read-only', 'network_access': False}, {'type': 'read-only', 'network_access': True}, 'divergent')]:
+            a, b = copy.deepcopy(self.case.rows), copy.deepcopy(self.case.rows)
+            a.append({'type': 'turn_context', 'payload': {'turn_id': 't1', 'sandbox_policy': left}})
+            b.append({'type': 'turn_context', 'payload': {'turn_id': 't1', 'sandbox_policy': right}})
+            result = self.compare(a, b)
+            self.assertEqual(result['sections']['turn_context']['relation'], expected)
+        # A similarly named field outside sandbox_policy is not an alias.
+        a[-1]['payload'] = {'mode': 'read-only'}
+        b[-1]['payload'] = {'type': 'read-only'}
+        self.assertEqual(self.compare(a, b)['sections']['turn_context']['relation'], 'divergent')
+
+    def test_instruction_coverage_does_not_erase_106_retained_turn_context_policies(self):
+        body = 'Retained initial instructions'
+        a, b = self.instruction_pair(body, '<user_instructions>\n\n' + body + '\n\n</user_instructions>')
+        for index in range(106):
+            context = {'turn_id': 'turn-{}'.format(index), 'sandbox_policy': {'mode': 'read-only'}}
+            a.append({'type': 'turn_context', 'payload': dict(context,
+                     truncation_policy={'mode': 'tokens', 'limit': 10000 + index}, user_instructions='Per-turn instruction')})
+            b.append({'type': 'turn_context', 'payload': dict(context, sandbox_policy={'type': 'read-only'})})
+        result = self.compare(a, b)
+        self.assertEqual(result['sections']['session_instructions']['relation'], 'equal')
+        self.assertNotEqual(result['sections']['turn_context']['relation'], 'equal')
+        policy = result['sections']['turn_context']['fields']['truncation_policy']
+        self.assertEqual((policy['local_count'], policy['alternative_count']), (106, 0))
+        self.assertEqual(policy['relation'], 'local_additional')
+        self.assertEqual(result['sections']['turn_context']['fields']['user_instructions']['relation'], 'local_additional')
+        self.assertNotEqual(result['classification'], 'equivalent_content')
+
+    def image_fixture(self):
+        obj = json.loads(self.case.exports[self.case.export_rel][0])
+        native = json.loads(obj['tables']['thread_items'][0]['item_json'])
+        urls = ['https://example.invalid/a%20b.png', 'data:image/png;base64,c3ludGhldGlj']
+        native['content'] = [{'type': 'image', 'url': url, 'detail': None} for url in urls]
+        obj['tables']['thread_items'][0]['item_json'] = json.dumps(native)
+        event = self.completed({'type': 'UserMessage', 'id': native['id'],
+                               'content': [{'type': 'image', 'image_url': url} for url in urls]})
+        return obj, event
+
+    def test_image_alias_requires_exact_urls_null_detail_and_preserves_order(self):
+        obj, event = self.image_fixture()
+        self.assertEqual(len(completed_event_coverage([event], base.TID, obj)[0]), 1)
+        for mutation in ('url', 'url_encoding', 'detail', 'extra', 'alias_conflict', 'reorder', 'duplicate'):
+            e, exported = copy.deepcopy(event), copy.deepcopy(obj)
+            blocks = e['payload']['item']['content']
+            if mutation == 'url': blocks[0]['image_url'] = 'https://example.invalid/different.png'
+            elif mutation == 'url_encoding': blocks[0]['image_url'] = blocks[0]['image_url'].replace('%20', ' ')
+            elif mutation == 'detail':
+                item = json.loads(exported['tables']['thread_items'][0]['item_json'])
+                item['content'][0]['detail'] = 'high'
+                exported['tables']['thread_items'][0]['item_json'] = json.dumps(item)
+            elif mutation == 'extra': blocks[0]['new_metadata'] = 'uncovered'
+            elif mutation == 'alias_conflict': blocks[0]['url'] = 'conflicting URL'
+            elif mutation == 'reorder': blocks.reverse()
+            else: blocks.append(copy.deepcopy(blocks[0]))
+            self.assertEqual(len(completed_event_coverage([e], base.TID, exported)[1]), 1, mutation)
+
+    def test_unsupported_compaction_and_file_change_events_remain_inconclusive(self):
+        for unknown in [{'type': 'compacted', 'payload': {'message': 'retained compaction'}},
+                        self.completed({'type': 'FileChange', 'id': 'new', 'changes': []})]:
+            a, b = copy.deepcopy(self.case.rows), copy.deepcopy(self.case.rows)
+            b.append(unknown)
+            result = self.compare(a, b)
+            self.assertEqual(result['classification'], 'inconclusive')
+            self.assertEqual(result['known_content_classification'], 'equivalent_content')
+            self.assertTrue(result['sections']['unrecognized_records']['alternative_types'])
+
+    @unittest.skipUnless(shutil.which('codex'), 'Codex CLI is not installed')
+    def test_native_image_completion_reads_copied_history_without_source_changes(self):
+        obj, event = self.image_fixture()
+        rows = [json.loads(line) for line in self.case.paginated.splitlines()] + [event]
+        data, exports = self.bind(rows, obj)
+        before = self.case.tree()
+        result = audit.compare_codex(self.case.rel, data, data, exports, exports)
+        self.assertEqual(result['classification'], 'equivalent_content', result)
+        self.assertEqual(result['migration_events']['alternative']['covered_count'], 1)
+        self.assertEqual(self.case.tree(), before)
+
     def bind(self, rows, obj):
         data = fixtures.lines(*rows)
         obj = copy.deepcopy(obj)

@@ -271,6 +271,19 @@ def compare_codex(rel, local, alternative, local_exports, alternative_exports):
     sections['instruction_storage'] = sections['instruction_context']
     sections['instruction_context'] = evidence(instructions_a, instructions_b)
     sections['instruction_context']['covered_elsewhere'] = evidence(covered_a, covered_b)
+    sections['session_instructions'] = evidence(
+        [r for r in instructions_a if r.get('scope') == 'session'],
+        [r for r in instructions_b if r.get('scope') == 'session'])
+    sections['session_instructions']['covered_elsewhere'] = evidence(covered_a, covered_b)
+    contexts_a = [r for r in instructions_a if r.get('type') == 'turn_context']
+    contexts_b = [r for r in instructions_b if r.get('type') == 'turn_context']
+    sections['turn_context'] = evidence(contexts_a, contexts_b)
+    # Field-level evidence explains richer historical context without weakening
+    # the ordered comparison of complete context records used for classification.
+    fields = sorted({key for r in contexts_a + contexts_b for key in r['payload']})
+    sections['turn_context']['fields'] = {key: evidence(
+        [r['payload'][key] for r in contexts_a if key in r['payload']],
+        [r['payload'][key] for r in contexts_b if key in r['payload']]) for key in fields}
     for side, records in [('local', instructions_a), ('alternative', instructions_b)]:
         sections['instruction_context'][side + '_session_instruction_characters'] = sum(
             len(record['value']) for record in records
@@ -278,7 +291,8 @@ def compare_codex(rel, local, alternative, local_exports, alternative_exports):
     result = {"thread_id": local_id, "local_format": local_mode, "alternative_format": other_mode,
               "sections": sections}
     result['findings'] = {key: sections[key]['relation'] for key in
-                          ('response_records', 'rollback_history', 'instruction_context', 'undo_metadata')
+                          ('response_records', 'rollback_history', 'instruction_context',
+                           'session_instructions', 'turn_context', 'undo_metadata')
                           if sections[key]['relation'] != 'equal'}
     try:
         left_export = matched_export(rel, local, local_exports)
@@ -488,6 +502,11 @@ def print_report(report, as_json=False):
                 for section, info in comparison.get("sections", {}).items():
                     print("    {}: {} (local {}, alternative {})".format(
                         section, info["relation"], info["local_count"], info["alternative_count"]))
+                    if section == 'turn_context':
+                        for field, detail in info.get('fields', {}).items():
+                            if detail['relation'] != 'equal':
+                                print('      {}: {} (local {}, alternative {})'.format(
+                                    field, detail['relation'], detail['local_count'], detail['alternative_count']))
                 print("    Preserved alternative: " + comparison["alternative_location"])
         for entry in report["other_files"]:
             print("{}: inconclusive — {}".format(entry["path"], entry["reason"]))

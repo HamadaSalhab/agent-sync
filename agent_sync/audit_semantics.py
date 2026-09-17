@@ -43,7 +43,30 @@ def normalize_context(value):
             result[name] = child
         else:
             result[key] = normalize_context(child)
+            if key == 'sandbox_policy' and isinstance(result[key], dict):
+                policy = result[key]
+                mode = policy.get('mode')
+                if isinstance(mode, str) and ('type' not in policy or policy['type'] == mode):
+                    policy['type'] = policy.pop('mode')
     return result
+
+
+def instruction_envelope(text):
+    """Remove exactly a known envelope, never strip instruction whitespace.
+
+    Prefer the two-newline envelope when present. Ambiguous older envelopes
+    can therefore remain unproven rather than erase an instruction's newlines.
+    """
+    for boundary in ('\n\n', '\n', ''):
+        prefix = '<user_instructions>' + boundary
+        suffix = boundary + '</user_instructions>'
+        if text.startswith(prefix) and text.endswith(suffix) and len(text) >= len(prefix) + len(suffix):
+            return text[len(prefix):-len(suffix)]
+    prefix = re.match(r'\A# AGENTS\.md instructions for ([^\r\n]+)\n\n<INSTRUCTIONS>\n', text)
+    suffix = '\n</INSTRUCTIONS>'
+    if prefix and prefix.group(1).strip() and text.endswith(suffix) and len(text) >= prefix.end() + len(suffix):
+        return text[prefix.end():-len(suffix)]
+    return None
 
 
 def initial_instruction_texts(rows):
@@ -75,9 +98,9 @@ def initial_instruction_texts(rows):
             texts.add(''.join(content))
         elif role == 'user':
             # Require an instruction-only message, not a quotation in a request.
-            match = re.fullmatch(r'\s*<user_instructions>\n?(.*?)\n?</user_instructions>\s*', ''.join(content), re.S)
-            if match:
-                texts.add(match.group(1))
+            instruction = instruction_envelope(''.join(content))
+            if instruction is not None:
+                texts.add(instruction)
             else:
                 break
         else:
@@ -114,6 +137,21 @@ def duration_ms(value):
     return value['secs'] * 1000 + value['nanos'] // 1000000
 
 
+def user_content(content):
+    if not isinstance(content, list):
+        raise ValueError('unsupported user content')
+    result = []
+    for block in content:
+        if not isinstance(block, dict):
+            raise ValueError('unsupported user content block')
+        if block.get('type') == 'image' and 'image_url' in block:
+            if set(block) != {'type', 'image_url'} or not isinstance(block['image_url'], str):
+                raise ValueError('unsupported image fields')
+            block = {'type': 'image', 'url': block['image_url'], 'detail': None}
+        result.append(block)
+    return result
+
+
 def convert_completed_item(item):
     """Known CoreTurnItem -> API fields, pinned to the tested 0.154 schema.
 
@@ -124,6 +162,7 @@ def convert_completed_item(item):
     kind = p.pop('type')
     out = {'type': kind[0].lower() + kind[1:], 'id': p.pop('id')}
     if kind == 'UserMessage':
+        p['content'] = user_content(p['content'])
         mapping = {'content': 'content', 'client_id': 'clientId'}
     elif kind == 'AgentMessage':
         content = p.pop('content')

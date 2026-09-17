@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4 — 2026-09-17
+
+- Compare instruction coverage across null fields, legacy instruction strings, text wrappers, and exact initial instruction carriers; retain raw storage evidence and meaningful context differences.
+- Verify known migrated item-completion events against exact thread/turn/item identities and native-validated exports, including cumulative reasoning, command path representations, and tool results. Unknown records remain inconclusive with type/count diagnostics.
+- Retain known-content classifications and archival/rollback/context/undo findings when another part of a comparison is inconclusive.
+- Add synthetic regressions for the 32,374-character context and 120-versus-117 archival-record cases, covered native migration events, and altered/missing evidence. No sync policy, data format, configuration, or identity changes.
+
 ## 0.1.3 — 2026-09-16
 
 - Add `audit-conflicts` with read-only text/JSON reports grouped by conversation ID, using preserved alternatives and cached snapshots. No source/data migration or automatic conflict resolution.

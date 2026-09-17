@@ -14,6 +14,7 @@ from pathlib import Path
 from . import codex
 from .files import SyncError, allowed, digest, json_rows, read_stable, safe_path, transcript
 from .native import CodexReader
+from .audit_semantics import instruction_records, completed_event_coverage
 
 
 class Inputs:
@@ -73,6 +74,14 @@ def evidence(local, alternative):
             "alternative_count": len(alternative),
             "local_sha256": digest(canonical(local).encode()),
             "alternative_sha256": digest(canonical(alternative).encode())}
+
+
+def unknown_evidence(local, alternative):
+    info = evidence(local, alternative)
+    for side, records in [('local', local), ('alternative', alternative)]:
+        info[side + '_types'] = dict(Counter(
+            r['type'] + '/' + str(r['payload'].get('type', '(no subtype)')) for r in records))
+    return info
 
 
 def rollout(data):
@@ -256,22 +265,43 @@ def compare_codex(rel, local, alternative, local_exports, alternative_exports):
         raise SyncError("Conflict versions have different conversation IDs")
     a, b = raw_sections(local_rows), raw_sections(other_rows)
     sections = {key: evidence(a[key], b[key]) for key in a}
+    sections['unrecognized_records'] = unknown_evidence(a['unrecognized_records'], b['unrecognized_records'])
+    instructions_a, covered_a = instruction_records(local_rows, other_rows)
+    instructions_b, covered_b = instruction_records(other_rows, local_rows)
+    sections['instruction_storage'] = sections['instruction_context']
+    sections['instruction_context'] = evidence(instructions_a, instructions_b)
+    sections['instruction_context']['covered_elsewhere'] = evidence(covered_a, covered_b)
+    for side, records in [('local', instructions_a), ('alternative', instructions_b)]:
+        sections['instruction_context'][side + '_session_instruction_characters'] = sum(
+            len(record['value']) for record in records
+            if record.get('scope') == 'session' and isinstance(record.get('value'), str))
     result = {"thread_id": local_id, "local_format": local_mode, "alternative_format": other_mode,
               "sections": sections}
+    result['findings'] = {key: sections[key]['relation'] for key in
+                          ('response_records', 'rollback_history', 'instruction_context', 'undo_metadata')
+                          if sections[key]['relation'] != 'equal'}
     try:
         left_export = matched_export(rel, local, local_exports)
         right_export = matched_export(rel, alternative, alternative_exports)
         left = native_turns(rel, local, left_export)
         right = native_turns(rel, alternative, right_export)
         sections["active_dialogue"] = evidence(left, right)
+        migration = {}
+        for side, rows, raw, export in [('local', local_rows, a, left_export),
+                                        ('alternative', other_rows, b, right_export)]:
+            covered, unknown = completed_event_coverage(rows, local_id, export)
+            covered_records = [{"type": r['type'], "payload": r['payload']} for r in covered]
+            for record in covered_records:
+                raw['unrecognized_records'].remove(record)
+            migration[side] = {'covered_count': len(covered), 'uncovered_count': len(unknown),
+                               'uncovered_reasons': dict(Counter(reason for _, reason in unknown)),
+                               'covered_sha256': digest(canonical(covered_records).encode())}
+        result['migration_events'] = migration
+        sections['unrecognized_records'] = unknown_evidence(a['unrecognized_records'], b['unrecognized_records'])
         # Raw Responses records preserve tool calls/results and rolled-back
         # material that native readers may omit. Never ignore discrepancies.
         important = [sections[k]["relation"] for k in
                      ("active_dialogue", "response_records", "rollback_history", "instruction_context")]
-        if sections["unrecognized_records"]["relation"] != "equal":
-            raise SyncError("Unrecognized stored records differ")
-        if sections["active_dialogue"]["relation"] != "equal" and sections["response_records"]["relation"] == "equal":
-            raise SyncError("Native views differ despite matching raw response records; reader coverage is inconclusive")
         non_equal = set(important) - {"equal"}
         if not non_equal:
             result["classification"] = "equivalent_content"
@@ -281,6 +311,11 @@ def compare_codex(rel, local, alternative, local_exports, alternative_exports):
             result["classification"] = "alternative_additional_content"
         else:
             result["classification"] = "divergent_content"
+        result['known_content_classification'] = result['classification']
+        if sections["unrecognized_records"]["relation"] != "equal":
+            raise SyncError("Unrecognized stored records differ (see types and migration event coverage)")
+        if sections["active_dialogue"]["relation"] != "equal" and sections["response_records"]["relation"] == "equal":
+            raise SyncError("Native views differ despite matching raw response records; reader coverage is inconclusive")
         result["history_rows_loaded"] = {
             side: sum(len(rows) for rows in obj["tables"].values()) if obj else 0
             for side, obj in (("local", left_export), ("alternative", right_export))}
@@ -444,6 +479,12 @@ def print_report(report, as_json=False):
                 print("  {}: {}".format(comparison["path"], comparison["classification"]))
                 if "reason" in comparison:
                     print("    " + comparison["reason"])
+                if comparison.get('known_content_classification') and comparison['classification'] == 'inconclusive':
+                    print('    Verified portions: ' + comparison['known_content_classification'])
+                unknown = comparison.get('sections', {}).get('unrecognized_records', {})
+                for side in ('local', 'alternative'):
+                    if unknown.get(side + '_types'):
+                        print('    {} unrecognized types: {}'.format(side, canonical(unknown[side + '_types'])))
                 for section, info in comparison.get("sections", {}).items():
                     print("    {}: {} (local {}, alternative {})".format(
                         section, info["relation"], info["local_count"], info["alternative_count"]))

@@ -15,6 +15,7 @@ Install `git-crypt` to exercise encryption tests. Install `codex` to exercise na
 
 ## Architecture
 
+- `agent_sync/audit_semantics.py`: conservative instruction and migration-event representation adapters.
 - `agent_sync/audit.py`: read-only conflict reports, ordered content comparisons, and isolated native coverage checks.
 - `agent_sync/native.py`: constrained native metadata/read clients; no model-turn methods.
 - `agent_sync/cli.py`: commands, planning, and applying local updates.

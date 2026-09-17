@@ -4,7 +4,7 @@ Sync **Claude Code and Codex conversations across your computers** through one p
 
 > **Fork attribution:** agent-sync is a fork and evolution of [Claude Code Conversation Sync](https://github.com/porkchop/claude-code-sync), created by **[porkchop](https://github.com/porkchop)** and its contributors. It builds on [HamadaSalhab's modified fork](https://github.com/HamadaSalhab/claude-code-sync). The original project established the Git-based conversation sync, backup, and encryption workflow. This repository preserves its Git history and original MIT copyright notice. Thank you to the original author and contributors. See [NOTICE.md](NOTICE.md).
 
-**Version 0.1.3:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
+**Version 0.1.4:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
 
 ## Install
 
@@ -172,6 +172,10 @@ Each comparison reports one of:
 - `inconclusive`: required evidence is missing, unsupported, ambiguous, or the native readers disagree in ways the audit cannot reconcile.
 
 Separate sections report active turns, all raw response records (including tool calls/results and material omitted by the active reader), rollback markers, instruction context, undo snapshots, other session metadata, and unrecognized records. Undo and other metadata differences remain prominent even when the dialogue is equivalent. Summary counts are per conversation; a conversation with different findings across multiple alternatives is marked inconclusive, with every comparison retained. No message bodies are printed; reports include IDs, paths, counts, hashes, and recovery locations.
+
+Instruction coverage treats absent/null instructions as empty and recognizes the legacy `instructions` / `base_instructions.text` representation. Changed text and non-null context fields remain significant. An initial instruction can also be covered by an exact initial system/developer message or an explicit instruction-only user block; arbitrary substrings, quoted dialogue, and later messages do not qualify. `instruction_storage` retains the original representation comparison, while `instruction_context` reports semantic coverage and session instruction character counts.
+
+Migration `item_completed` events are recognized only when their thread/turn/item identity and content match an exact-hash-bound history export that the native reader has independently verified. Known message, reasoning, command, MCP, and web-search representations are translated explicitly. Cumulative reasoning snapshots must preserve order and repeated text. Command arguments, paths, outputs, statuses, errors, and tool results remain checked; unknown fields or unsupported conversions stay inconclusive. Reports include covered/uncovered event counts and reasons, plus unrecognized record types. `findings` retains verified archival/context/undo differences even on an inconclusive comparison; `known_content_classification` summarizes the portions compared successfully. Neither is a resolution recommendation.
 
 For paginated sessions, exports must match the exact thread ID, log path, SHA-256, and complete projection byte offset. Live local history is read from a disposable DB/WAL copy, never by opening the source database in SQLite. The audit pages through full native turns and checks exported turn/item coverage, order, statuses, errors, and payloads. It compares ordered sequences with duplicates intact. Generated user/assistant/reasoning item IDs, turn IDs, and turn timing are excluded from dialogue comparison; command IDs, nested fields, statuses, errors, tool arguments, and results are retained. Missing or changing inputs fail closed.
 

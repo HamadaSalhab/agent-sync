@@ -10,6 +10,29 @@ Sync **Claude Code and Codex conversations across your computers** through one p
 
 Requires **Python 3.8+** and **Git**. Use **Python 3.12+** for full nanosecond timestamp precision on macOS; older Python builds can round restored times down to microseconds. No third-party Python runtime packages, API key, or paid service is required by agent-sync. Optional encryption requires `git-crypt`. Restoring paginated Codex sessions or saved conversation names also requires the Codex CLI for its native history schema and metadata operations.
 
+### Homebrew (macOS and Linux)
+
+```bash
+brew trust --formula hamadasalhab/tap/agent-sync
+brew install HamadaSalhab/tap/agent-sync
+agent-sync --version
+```
+
+The `brew trust` step is required by Homebrew 7 for third-party formulae. Omit that line on older Homebrew versions without a `trust` command.
+
+This installs the experimental **0.1.5** release from the project's own [Homebrew tap](https://github.com/HamadaSalhab/homebrew-tap). It is not a Homebrew/core package. Homebrew manages the Python runtime; install the Codex CLI separately when syncing Codex history or titles.
+
+To update later:
+
+```bash
+brew update
+brew upgrade HamadaSalhab/tap/agent-sync
+```
+
+Installing, upgrading, or uninstalling the tool does not initialize sync, change your machine identity, or upload or restore conversations. Existing configuration under `~/.local/share/agent-sync` is reused; **do not run `init` again on an already configured machine**. Keep your conversation-data repository private and separate from this public source repository.
+
+### From source
+
 From this source checkout:
 
 ```bash
@@ -65,10 +88,11 @@ agent-sync init --remote git@github.com:YOUR_USERNAME/agent-conversations.git
 
 # Close the agents first. Existing local conversations are backed up and merged.
 agent-sync pull --all
-agent-sync push --all
 ```
 
 Start each agent to find the synced conversations. In Codex CLI, `codex resume --all` searches across project directories; `codex resume <session-id>` selects a specific session. Sign in to each agent separately on each machine.
+
+For a one-way migration, push from the source machine and pull on the destination. The source machine does not need to pull. Push from the destination only when you want to share work created there with the other machines.
 
 ## Daily use
 

@@ -23,6 +23,7 @@ Install `git-crypt` to exercise encryption tests. Install `codex` to exercise na
 - `agent_sync/codex.py`: per-thread paginated history export and validated import into Codex's native schema.
 - `agent_sync/files.py`: tool allowlists, safe paths, stable reads, merge rules.
 - `agent_sync/store.py`: Git snapshots, encryption, backups, and validation.
+- `agent_sync/snapshot.py`: versioned, checksum-verified transport chunks; full original files remain the merge inputs.
 - `tests/`: two-machine integration tests and merge-policy tests.
 
 When adding an adapter, explicitly define its transferable files, history merge rules, native discovery requirements, and exclusions. Include a round-trip test. Do not add whole-home directory copies or merge SQLite files using Git.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6 — 2026-09-18
+
+- Store files larger than 32 MiB in ordered, checksum-verified Git storage chunks and restore their exact bytes and modification times. Applies to both agents, portable Codex exports, and git-crypt repositories; no Git LFS dependency.
+- Introduce format version 2 only when chunks are needed. Read existing version-1 snapshots; older clients refuse version 2 and must be upgraded on every machine. Local backup format, configuration, machine identity, and conflict policies are unchanged.
+- Add `repair-large-files [--push]` to preserve and repack one rejected unpublished own-machine snapshot without touching live agent files or force-pushing. Reject complex/unrelated histories and check outgoing Git blobs against the 100 MiB hosting limit.
+- Cover production chunk boundaries, corruption, missing/reordered chunks, path/symlink rejection, mixed snapshot versions, exact restoration, conflicts, encryption, native history, read-only audits, and rejected-push recovery with synthetic regression tests.
+
 ## 0.1.5 — 2026-09-17
 
 - Recognize exact double-newline and AGENTS.md initial instruction envelopes without stripping instruction content. Normalize nonconflicting `sandbox_policy.mode`/`type` aliases only within sandbox policies.

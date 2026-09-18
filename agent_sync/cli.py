@@ -36,6 +36,8 @@ def parser():
             sub.add_argument("name", help="Backup name from the backups command")
     selection(init)
     subs.add_parser("backups", help="List local backups")
+    repair = subs.add_parser("repair-large-files", help="Repack one rejected oversized snapshot, preserving its original Git commit")
+    repair.add_argument("--push", action="store_true", help="Push the repaired captured snapshot without reading live sessions")
     audit = subs.add_parser("audit-conflicts", help="Read-only report of preserved conflicts using cached data")
     selection(audit)
     audit.add_argument("--json", action="store_true", help="Print a structured report to stdout")
@@ -139,7 +141,9 @@ def run(args, state):
     cfg = config.load(state)
     repo = state / "repository"
     tools = selected(args, cfg)
-    if args.command == "audit-conflicts":
+    if args.command == "repair-large-files":
+        store.repair_large_files(repo, cfg, args.push)
+    elif args.command == "audit-conflicts":
         from .audit import build_report, print_report
         return print_report(build_report(state, cfg, tools), args.json)
     elif args.command == "unlock":
@@ -172,10 +176,12 @@ def run(args, state):
                 print("{}: would snapshot {} files (no fetch, writes, or push).".format(tool, len(files)))
             return 0
         store.refresh(repo, cfg)
+        store.check_push_size(repo)
         for tool, files in snapshots.items():
             store.write_snapshot(repo, cfg, tool, files)
             print("{}: snapshotted {} files.".format(tool, len(files)))
         store.commit(repo, "Sync {} from {}".format(", ".join(tools), cfg["machine_id"]))
+        store.check_push_size(repo)
         # Always push: a previous attempt may have committed successfully but
         # failed to reach the remote. Git rejects concurrent updates safely.
         store.git(repo, "push", "origin", "HEAD:refs/heads/" + cfg["branch"])

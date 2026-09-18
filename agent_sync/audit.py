@@ -11,7 +11,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 
-from . import codex
+from . import codex, snapshot
 from .files import SyncError, allowed, digest, json_rows, read_stable, safe_path, transcript
 from .native import CodexReader
 from .audit_semantics import instruction_records, completed_event_coverage
@@ -360,25 +360,24 @@ def conflicts(state, tools, inputs):
 
 
 def cached_exports(state, inputs):
-    """Read only portable exports from the existing v1 snapshots, never fetch."""
+    """Read portable exports from cached v1/v2 snapshots, never fetch."""
     repo = state / "repository"
     marker = json.loads(inputs.read(safe_path(repo, "agent-sync.json")))
-    if marker.get("format") != "agent-sync" or marker.get("version") != 1:
+    if marker.get("format") != "agent-sync" or marker.get("version") not in snapshot.VERSIONS:
         raise SyncError("Unsupported cached repository format")
     exports = {}
     for manifest in sorted((repo / "machines").glob("*/codex/manifest.json")):
         manifest = safe_path(repo, manifest.relative_to(repo).as_posix())
         meta = json.loads(inputs.read(manifest))
-        if meta.get("version") != 1 or not isinstance(meta.get("files"), dict):
+        if meta.get("version") not in snapshot.VERSIONS or not isinstance(meta.get("files"), dict):
             raise SyncError("Invalid cached snapshot manifest")
         for rel, attrs in meta["files"].items():
             if not rel.startswith(codex.EXPORT_DIR + "/"):
                 continue
             if not allowed("codex", rel):
                 raise SyncError("Unsupported cached history path")
-            data = inputs.read(safe_path(manifest.parent, "data/" + rel))
-            if digest(data) != attrs.get("sha256"):
-                raise SyncError("Cached history checksum mismatch")
+            safe_path(manifest.parent, "data/" + rel)
+            data, _ = snapshot.read_file(manifest.parent, rel, attrs, meta["version"], read=inputs.read)
             exports.setdefault(rel, []).append(data)
     return exports
 

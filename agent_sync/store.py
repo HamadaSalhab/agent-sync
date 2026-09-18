@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import snapshot
+
 from .files import (SyncError, allowed, atomic_write, collect, digest, encode,
                     safe_path)
 
@@ -56,10 +58,11 @@ def validate_repo(repo):
     marker = safe_path(repo, "agent-sync.json")
     try:
         data = json.loads(marker.read_text())
-        if not isinstance(data, dict) or any(data.get(k) != v for k, v in FORMAT.items()):
+        if (not isinstance(data, dict) or data.get("format") != FORMAT["format"]
+                or type(data.get("version")) is not int or data["version"] not in snapshot.VERSIONS):
             raise ValueError("unsupported format")
     except (OSError, ValueError) as exc:
-        raise SyncError("Not an agent-sync v1 data repository: {}".format(exc))
+        raise SyncError("Unsupported agent-sync data repository; update agent-sync: {}".format(exc))
     # A locked git-crypt checkout still contains the plaintext format marker.
     for path in (repo / "machines").glob("*/*/manifest.json"):
         safe_path(repo, path.relative_to(repo).as_posix())
@@ -158,10 +161,16 @@ def write_snapshot(repo, cfg, tool, files):
     root = safe_path(repo, "machines/{}/{}".format(cfg["machine_id"], tool))
     manifest = {"version": 1, "files": {}}
     for rel, (data, stamp) in sorted(files.items()):
-        path = safe_path(root, "data/" + rel)
-        if not path.exists() or path.read_bytes() != data:
-            atomic_write(path, data)
-        manifest["files"][rel] = {"sha256": digest(data), "mtime_ns": stamp}
+        if not allowed(tool, rel):
+            raise SyncError("Unsupported snapshot path: " + rel)
+        manifest["files"][rel] = snapshot.write_file(root, rel, data, stamp)
+    if any("chunks" in attrs for attrs in manifest["files"].values()):
+        manifest["version"] = 2
+        marker = validate_repo(repo)
+        if marker["version"] == 1:
+            marker["version"] = 2
+            atomic_write(repo / "agent-sync.json", encode(marker))
+            print("Large-file storage enabled. Update every machine to agent-sync 0.1.6 or newer before syncing.")
     target = safe_path(root, "manifest.json")
     data = encode(manifest)
     if not target.exists() or target.read_bytes() != data:
@@ -185,22 +194,95 @@ def read_snapshots(repo, tools):
                 continue
             try:
                 meta = json.loads(manifest.read_text())
-                if not isinstance(meta, dict) or meta["version"] != 1 or not isinstance(meta["files"], dict):
+                if (not isinstance(meta, dict) or type(meta["version"]) is not int
+                        or meta["version"] not in snapshot.VERSIONS or not isinstance(meta["files"], dict)):
                     raise ValueError("unsupported manifest")
                 for rel, attrs in meta["files"].items():
                     if not allowed(tool, rel):
                         raise SyncError("Snapshot contains an unsupported file: {}/{}".format(tool, rel))
-                    path = safe_path(root, "data/" + rel)
-                    stamp = attrs["mtime_ns"]
-                    if type(stamp) is not int or not 0 <= stamp <= 9223372036854775807:
-                        raise ValueError("invalid modification time")
-                    data = path.read_bytes()
-                    if digest(data) != attrs["sha256"]:
-                        raise SyncError("Snapshot checksum mismatch: {}/{}".format(tool, rel))
+                    safe_path(root, "data/" + rel)
+                    data, stamp = snapshot.read_file(root, rel, attrs, meta["version"])
                     result[tool].setdefault(rel, []).append((data, stamp))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 raise SyncError("Invalid snapshot {}: {}".format(manifest, exc))
     return result
+
+
+GIT_BLOB_LIMIT = 100 * 1024 * 1024
+
+
+def oversized_outgoing(repo, base):
+    objects = git(repo, "rev-list", "--objects", "HEAD", "^" + base).stdout
+    ids = [line.split(" ", 1)[0] for line in objects.splitlines()]
+    if not ids:
+        return []
+    result = subprocess.run(["git", "-C", str(repo), "cat-file",
+                             "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+                            input="\n".join(ids) + "\n", capture_output=True, text=True)
+    if result.returncode:
+        raise SyncError("Could not verify outgoing Git object sizes: " + result.stderr.strip())
+    return [sha for sha, kind, size in (line.split() for line in result.stdout.splitlines())
+            if kind == "blob" and int(size) > GIT_BLOB_LIMIT]
+
+
+def check_push_size(repo):
+    if oversized_outgoing(repo, "FETCH_HEAD"):
+        raise SyncError("Unpublished Git history contains a file over 100 MiB. "
+                        "Run agent-sync repair-large-files --push to preserve and repack a single "
+                        "rejected snapshot. Adding another commit cannot remove an oversized historical blob.")
+
+
+def repair_large_files(repo, cfg, push=False):
+    """Repack exactly one unpublished own-machine snapshot; never force-push."""
+    validate_repo(repo)
+    require_clean(repo)
+    if git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip() != cfg["branch"]:
+        raise SyncError("Sync checkout is on the wrong branch")
+    git(repo, "fetch", "origin", "refs/heads/" + cfg["branch"])
+    base = git(repo, "rev-parse", "FETCH_HEAD").stdout.strip()
+    head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    parents = git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+    if parents != [head, base]:
+        raise SyncError("Repair requires exactly one unpublished snapshot directly after remote main. "
+                        "No history was rewritten; retain your backup and review the pending commits.")
+    namespace = "machines/" + cfg["machine_id"] + "/"
+    changed = git(repo, "diff", "--name-only", base, head).stdout.splitlines()
+    if any(not p.startswith(namespace) and p != "agent-sync.json" for p in changed):
+        raise SyncError("Repair refuses a pending commit that changes another machine or unrelated files")
+    if not oversized_outgoing(repo, base):
+        raise SyncError("No oversized unpublished Git blobs need repair")
+    # Validate every cached file before changing the representation. Do not read
+    # live agent homes: the rejected snapshot is already a complete frozen input.
+    snapshots = {}
+    for tool in ("claude", "codex"):
+        root = safe_path(repo, namespace + tool)
+        manifest = safe_path(root, "manifest.json")
+        if not manifest.exists():
+            continue
+        meta = json.loads(manifest.read_text())
+        if not isinstance(meta, dict) or not isinstance(meta.get("files"), dict):
+            raise SyncError("Invalid pending snapshot manifest")
+        snapshots[tool] = {}
+        for rel, attrs in meta["files"].items():
+            if not allowed(tool, rel):
+                raise SyncError("Unsupported pending snapshot path")
+            safe_path(root, "data/" + rel)
+            snapshots[tool][rel] = snapshot.read_file(root, rel, attrs, meta.get("version"))
+    recovery = "refs/agent-sync/recovery/" + uuid.uuid4().hex
+    git(repo, "update-ref", recovery, head)
+    print("Original rejected snapshot preserved at {} ({})".format(recovery, head))
+    for tool, files in snapshots.items():
+        write_snapshot(repo, cfg, tool, files)
+    git(repo, "add", "--", "agent-sync.json", namespace)
+    git(repo, "-c", "user.name=agent-sync", "-c", "user.email=agent-sync@localhost",
+        "commit", "--amend", "--no-edit")
+    check_push_size(repo)
+    if push:
+        git(repo, "push", "origin", "HEAD:refs/heads/" + cfg["branch"])
+        print("Push complete. Repaired the captured snapshot; live agent files were not read or changed.")
+    else:
+        print("Repair complete. The preserved snapshot has not been pushed.")
+    return recovery
 
 
 def backup(state, cfg, tools):

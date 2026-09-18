@@ -4,7 +4,7 @@ Sync **Claude Code and Codex conversations across your computers** through one p
 
 > **Fork attribution:** agent-sync is a fork and evolution of [Claude Code Conversation Sync](https://github.com/porkchop/claude-code-sync), created by **[porkchop](https://github.com/porkchop)** and its contributors. It builds on [HamadaSalhab's modified fork](https://github.com/HamadaSalhab/claude-code-sync). The original project established the Git-based conversation sync, backup, and encryption workflow. This repository preserves its Git history and original MIT copyright notice. Thank you to the original author and contributors. See [NOTICE.md](NOTICE.md).
 
-**Version 0.1.5:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
+**Version 0.1.6:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
 
 ## Install
 
@@ -20,7 +20,7 @@ agent-sync --version
 
 The `brew trust` step is required by Homebrew 7 for third-party formulae. Omit that line on older Homebrew versions without a `trust` command.
 
-This installs the experimental **0.1.5** release from the project's own [Homebrew tap](https://github.com/HamadaSalhab/homebrew-tap). It is not a Homebrew/core package. Homebrew manages the Python runtime; install the Codex CLI separately when syncing Codex history or titles.
+This installs the experimental **0.1.6** release from the project's own [Homebrew tap](https://github.com/HamadaSalhab/homebrew-tap). It is not a Homebrew/core package. Homebrew manages the Python runtime; install the Codex CLI separately when syncing Codex history or titles.
 
 To update later:
 
@@ -151,6 +151,22 @@ Full desktop-app state synchronization is outside v0.1: pins, project organizati
 
 ## How conflicts work
 
+### Large conversations
+
+Version 0.1.6 stores files larger than 32 MiB as ordered, checksum-verified chunks in the Git snapshot. Pull reconstructs the exact original bytes and modification time before applying normal merge rules. Live transcripts and local backups remain complete files. This also covers large Claude files and paginated Codex exports, and works with git-crypt without Git LFS.
+
+The first chunked snapshot upgrades the data repository to format version 2. **Update agent-sync to 0.1.6 or newer on every machine before syncing that repository.** Older clients refuse the new format. Version 0.1.6 still reads existing version-1 repositories and snapshots; machine identities, local configuration, and backup formats do not change.
+
+If 0.1.5 already created a local snapshot whose push was rejected for a file over GitHub's 100 MiB limit, update the tool and run:
+
+```bash
+agent-sync repair-large-files --push
+```
+
+This narrowly scoped recovery command requires a clean checkout with exactly one unpublished snapshot directly after the current remote commit, changing only this machine's namespace (and optionally the format marker). It preserves the original commit under a local `refs/agent-sync/recovery/` reference, repacks its complete files, and amends only that unpublished commit. It never force-pushes or reads/writes live agent data. The `--push` flag uploads the captured snapshot; omit it to repair locally without pushing. It refuses more complex histories for review. A normal `push` also checks outgoing Git history for oversized blobs before contacting the push endpoint.
+
+### Snapshot layout
+
 The data repository contains a separate snapshot for each machine:
 
 ```text
@@ -160,9 +176,11 @@ machines/
     claude/
       manifest.json       # hashes and original modification times
       data/projects/...
+      chunks/<sha256>    # large-file pieces, referenced by the manifest
     codex/
       manifest.json
       data/sessions/...
+      chunks/<sha256>
 ```
 
 Every `init` generates a new machine ID. **Initialize each computer independently; do not copy `config.json` between machines.** Separate namespaces allow Git to merge pushes from different machines. Git's history retains earlier snapshots, and identical blobs are deduplicated by Git.

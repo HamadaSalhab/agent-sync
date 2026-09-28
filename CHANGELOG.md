@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7 — 2026-09-28
+
+- Support Codex 0.157.1's nullable `thread_items.started_at_ms` and `completed_at_ms` fields explicitly. Preserve both fields in portable history export version 2; retain version-1 exports and import their absent timings as null into newer stores.
+- Continue rejecting unknown and partial schemas, malformed export rows, and invalid timestamp values. Refuse version-2 imports into older stores before changing history or rollout files; let Codex manage its own migrations.
+- Recognize otherwise identical old exports and new exports with null timings as equivalent during pull and conflict audits, retaining the richer format. Preserve differing non-null timings and other history differences as conflicts.
+- Add isolated backup/export/import/restore, legacy compatibility, transaction rollback, and native no-model-turn regressions. This fixes `backup --all && pull --all` stopping at backup with the new schema. Upgrade agent-sync on both machines before exchanging version-2 history exports.
+
 ## 0.1.6 — 2026-09-18
 
 - Store files larger than 32 MiB in ordered, checksum-verified Git storage chunks and restore their exact bytes and modification times. Applies to both agents, portable Codex exports, and git-crypt repositories; no Git LFS dependency.

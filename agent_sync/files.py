@@ -179,6 +179,11 @@ def merge_file(tool, rel, versions, local=None):
         return merged, stamp, []
     if len(values) == 1:
         return values[0][0], values[0][1], []
+    if tool == "codex" and rel.startswith(".agent-sync-history/"):
+        from .codex import equivalent_export
+        equivalent = equivalent_export(rel, values)
+        if equivalent is not None:
+            return equivalent[0], equivalent[1], []
     if parsed is not None:
         longest, rows = max(parsed, key=lambda pair: len(pair[1]))
         if all(rows[:len(other)] == other for _, other in parsed):

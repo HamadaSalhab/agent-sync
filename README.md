@@ -4,7 +4,7 @@ Sync **Claude Code and Codex conversations across your computers** through one p
 
 > **Fork attribution:** agent-sync is a fork and evolution of [Claude Code Conversation Sync](https://github.com/porkchop/claude-code-sync), created by **[porkchop](https://github.com/porkchop)** and its contributors. It builds on [HamadaSalhab's modified fork](https://github.com/HamadaSalhab/claude-code-sync). The original project established the Git-based conversation sync, backup, and encryption workflow. This repository preserves its Git history and original MIT copyright notice. Thank you to the original author and contributors. See [NOTICE.md](NOTICE.md).
 
-**Version 0.1.6:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
+**Version 0.1.7:** a command-line first release for macOS, Linux, and Windows through WSL. Conversation sync works separately within each tool; it does not convert Claude conversations into Codex conversations or vice versa.
 
 ## Install
 
@@ -20,7 +20,7 @@ agent-sync --version
 
 The `brew trust` step is required by Homebrew 7 for third-party formulae. Omit that line on older Homebrew versions without a `trust` command.
 
-This installs the experimental **0.1.6** release from the project's own [Homebrew tap](https://github.com/HamadaSalhab/homebrew-tap). It is not a Homebrew/core package. Homebrew manages the Python runtime; install the Codex CLI separately when syncing Codex history or titles.
+This installs the experimental **0.1.7** release from the project's own [Homebrew tap](https://github.com/HamadaSalhab/homebrew-tap). It is not a Homebrew/core package. Homebrew manages the Python runtime; install the Codex CLI separately when syncing Codex history or titles.
 
 To update later:
 
@@ -143,7 +143,11 @@ Codex stores its local data under `CODEX_HOME`, normally `~/.codex`. Its native 
 
 For **paginated** sessions, logs alone are insufficient. agent-sync reads the history store in a consistent read-only transaction and exports each thread's turns, items, realtime items, and projection position as JSON under `.agent-sync-history/`. Each export references the exact log checksum. On pull, Codex initializes a new machine's schema, then agent-sync validates and imports only matching threads in one SQLite transaction. Other threads are retained. Unknown schemas, missing history, or mismatched exports stop the operation. This adapter depends on internal Codex schema version 1 and is experimental.
 
-Native integration tests cover both legacy `thread/read` and paginated `thread/turns/list` using isolated Codex homes. They send no model prompt and require no credentials. Compatibility is tested with **Codex CLI 0.154.0**. Run these tests against your installed version before relying on a different session format.
+The adapter explicitly supports the original item schema and Codex 0.157.1's nullable `INTEGER` columns `started_at_ms` and `completed_at_ms`. The original schema produces portable history export version 1; the new schema produces version 2 with both fields preserved, including nulls. Version-1 exports remain readable and import into the new schema with null item timings. Version-2 exports require a destination schema with both columns; upgrade Codex and let Codex migrate its own store if they are missing. agent-sync does not alter the schema or drop timing fields. Unknown columns, partial timing-column additions, and incompatible timing declarations are rejected. **Install agent-sync 0.1.7 or newer on every syncing machine before exchanging version-2 history exports**; agent-sync 0.1.6 and earlier reject them. History export versions are separate from Git snapshot/chunk versions.
+
+When old and new exports differ only by absent versus null item timings, pull retains the version-2 export without reporting a conflict. Differing non-null timings or any other history differences still use the normal conflict-preservation policy; conflict audits also recognize the equivalent null-only representations.
+
+Native integration tests cover both legacy `thread/read` and paginated `thread/turns/list` using isolated Codex homes. They send no model prompt and require no credentials. Compatibility has been tested with **Codex CLI 0.154.0 and 0.157.1**. Run these tests against your installed version before relying on a different session format.
 
 Saved names are applied through Codex's `thread/name/set` metadata operation after restoring files and history. The merged index determines the name, so newer local renames win over older remote entries. Native rename timestamps are not allowed to replace the original index timestamps. Names for sessions without supported local logs are retained in the index but not applied. This also repairs names imported with 0.1.1: close the agents and run `agent-sync pull --tool codex` again, then reopen the resume picker. Native name restoration does not start a model turn.
 

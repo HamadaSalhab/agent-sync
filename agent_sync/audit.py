@@ -251,7 +251,7 @@ def matched_export(rel, data, candidates):
         projection = obj["tables"]["thread_history_projection_state"][0]
         if projection["next_rollout_byte_offset"] != len(data):
             raise SyncError("Paginated export does not cover the exact complete rollout")
-        if obj not in matches:
+        if not any(codex.canonical_export(obj) == codex.canonical_export(other) for other in matches):
             matches.append(obj)
     if len(matches) != 1:
         raise SyncError("{} checksum-matched exports found; exactly one is required".format(len(matches)))

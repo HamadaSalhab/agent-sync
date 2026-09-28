@@ -30,6 +30,13 @@ TABLES = {
     "thread_history_projection_state": ("thread_id", "next_rollout_byte_offset", "next_rollout_ordinal"),
     "thread_realtime_items": ("thread_id", "item_id", "rollout_ordinal", "created_at_ms", "item_type", "item_json"),
 }
+# Export v1 is the original schema. V2 explicitly carries the nullable item
+# timings added by Codex 0.157.1; unknown or partial schemas still fail closed.
+ITEM_TIMINGS = ("started_at_ms", "completed_at_ms")
+EXPORT_SCHEMAS = {
+    1: TABLES,
+    2: dict(TABLES, thread_items=TABLES["thread_items"] + ITEM_TIMINGS),
+}
 
 
 def saved_names(root):
@@ -93,10 +100,20 @@ def restore_names(root, names=None):
 
 
 def check_schema(connection):
+    version = 1
     for table, fields in TABLES.items():
-        actual = {row[1] for row in connection.execute('PRAGMA table_info("{}")'.format(table))}
-        if actual != set(fields):
-            raise SyncError("Unsupported Codex history schema in {}. No history rows were imported.".format(table))
+        columns = {row[1]: row for row in connection.execute('PRAGMA table_info("{}")'.format(table))}
+        actual = set(columns)
+        if table == "thread_items" and actual == set(EXPORT_SCHEMAS[2][table]):
+            for field in ITEM_TIMINGS:
+                _, _, kind, required, default, primary_key = columns[field]
+                if kind.upper() != "INTEGER" or required or default is not None or primary_key:
+                    raise SyncError("Unsupported Codex history schema: {}.{} must be nullable INTEGER with no default.".format(table, field))
+            version = 2
+        elif actual != set(fields):
+            raise SyncError("Unsupported Codex history schema in {} (columns: {}). No history rows were imported.".format(
+                table, ", ".join(sorted(actual))))
+    return version
 
 
 def export_history(root, files):
@@ -123,11 +140,11 @@ def export_history(root, files):
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("BEGIN")  # Consistent read, including committed WAL records.
-            check_schema(connection)
+            version = check_schema(connection)
             for rel, data, stamp, thread_id in sessions:
-                payload = {"version": 1, "thread_id": thread_id, "rollout_path": rel,
+                payload = {"version": version, "thread_id": thread_id, "rollout_path": rel,
                            "rollout_sha256": digest(data), "tables": {}}
-                for table, fields in TABLES.items():
+                for table, fields in EXPORT_SCHEMAS[version].items():
                     rows = connection.execute('SELECT {} FROM "{}" WHERE thread_id=?'.format(
                         ",".join('"{}"'.format(f) for f in fields), table), (thread_id,))
                     payload["tables"][table] = sorted([dict(row) for row in rows], key=lambda row: json.dumps(row, sort_keys=True))
@@ -147,7 +164,8 @@ def export_history(root, files):
 def validate_export(relative, data):
     try:
         obj = json.loads(data)
-        if not isinstance(obj, dict) or obj["version"] != 1:
+        if (not isinstance(obj, dict) or type(obj["version"]) is not int
+                or obj["version"] not in EXPORT_SCHEMAS):
             raise ValueError("unknown export format")
         thread_id = str(uuid.UUID(obj["thread_id"]))
         sha = obj["rollout_sha256"]
@@ -159,7 +177,7 @@ def validate_export(relative, data):
             raise ValueError("export identity does not match filename")
         if not isinstance(obj["tables"], dict) or set(obj["tables"]) != set(TABLES):
             raise ValueError("unsupported tables")
-        for table, fields in TABLES.items():
+        for table, fields in EXPORT_SCHEMAS[obj["version"]].items():
             rows = obj["tables"][table]
             if not isinstance(rows, list):
                 raise ValueError("table rows must be a list")
@@ -169,6 +187,9 @@ def validate_export(relative, data):
                 if any(v is not None and type(v) not in (str, int) for v in row.values()):
                     raise ValueError("invalid history value")
                 for field, value in row.items():
+                    if field in ITEM_TIMINGS and value is not None:
+                        if type(value) is not int or not -(2 ** 63) <= value < 2 ** 63:
+                            raise ValueError("invalid nullable item timestamp")
                     if field in ("rollout_ordinal", "created_at_ms", "updated_at_ordinal", "next_rollout_byte_offset", "next_rollout_ordinal"):
                         if type(value) is not int or value < 0:
                             raise ValueError("invalid history offset")
@@ -177,6 +198,29 @@ def validate_export(relative, data):
         return obj
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         raise SyncError("Invalid portable Codex history {}: {}".format(relative, exc))
+
+
+def canonical_export(obj):
+    """Compare validated exports with v1's absent timings represented as NULL.
+
+    Keep every other field, including unknown envelope metadata, significant.
+    This is an equality check, never a merge of differing history or timings.
+    """
+    tables = {}
+    for table, rows in obj["tables"].items():
+        if obj["version"] == 1 and table == "thread_items":
+            rows = [dict(row, started_at_ms=None, completed_at_ms=None) for row in rows]
+        tables[table] = sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))
+    return dict(obj, version=2, tables=tables)
+
+
+def equivalent_export(relative, values):
+    """Return an existing richest-format export only if all histories agree."""
+    parsed = [(value, validate_export(relative, value[0])) for value in values]
+    reference = canonical_export(parsed[0][1])
+    if all(canonical_export(obj) == reference for _, obj in parsed):
+        return max(parsed, key=lambda pair: (pair[1]["version"], pair[0][1], digest(pair[0][0])))[0]
+    return None
 
 
 def matching_exports(root, future_files):
@@ -214,7 +258,7 @@ def matching_exports(root, future_files):
     by_id = {}
     for obj in exports:
         previous = by_id.get(obj["thread_id"])
-        if previous is not None and previous["tables"] != obj["tables"]:
+        if (previous is not None and canonical_export(previous)["tables"] != canonical_export(obj)["tables"]):
             raise SyncError("Divergent history exports share a Codex thread ID; resolve their active/archive locations first.")
         # Codex can retain several rollout files for the same thread. Keep all
         # logs, but import identical database rows only once.
@@ -321,12 +365,25 @@ def prepare_import(root, exports):
 
 
 def write_rows(connection, exports):
+    version = check_schema(connection)
+    # Check the entire batch before deleting rows. An old Codex database cannot
+    # represent v2; never migrate it ourselves or silently discard its fields.
     for obj in exports:
-        for table, fields in TABLES.items():
+        source_version = obj.get("version", 1)
+        if type(source_version) is not int or source_version not in EXPORT_SCHEMAS:
+            raise SyncError("Unsupported portable Codex history version")
+        if source_version > version:
+            raise SyncError("Codex history export requires nullable item timing columns. Upgrade Codex and let it migrate its history store before importing; no history rows were imported.")
+        for table, fields in EXPORT_SCHEMAS[source_version].items():
+            if any(set(row) != set(fields) for row in obj["tables"][table]):
+                raise SyncError("Unsupported Codex history row fields in " + table)
+    for obj in exports:
+        for table, fields in EXPORT_SCHEMAS[version].items():
             connection.execute('DELETE FROM "{}" WHERE thread_id=?'.format(table), (obj["thread_id"],))
             sql = 'INSERT INTO "{}" ({}) VALUES ({})'.format(table,
                 ",".join('"{}"'.format(f) for f in fields), ",".join("?" for _ in fields))
-            connection.executemany(sql, [[row[f] for f in fields] for row in obj["tables"][table]])
+            connection.executemany(sql, [[row.get(f) if f in ITEM_TIMINGS else row[f]
+                                         for f in fields] for row in obj["tables"][table]])
 
 
 def import_history(root, exports):
